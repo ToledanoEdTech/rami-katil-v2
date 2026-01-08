@@ -279,9 +279,17 @@ function App() {
     
     requestAnimationFrame((time) => {
         if(canvasRef.current) {
-            canvasRef.current.width = window.innerWidth;
-            canvasRef.current.height = window.innerHeight;
-            
+            // הגבל רזולוציה למניעת ביצועים איטיים במחשבים עם מסכים גדולים
+            const maxCanvasWidth = isMobile ? window.innerWidth : Math.min(window.innerWidth, 1920);
+            const maxCanvasHeight = isMobile ? window.innerHeight : Math.min(window.innerHeight, 1080);
+
+            canvasRef.current.width = maxCanvasWidth;
+            canvasRef.current.height = maxCanvasHeight;
+
+            // התאם את גודל הקנבס ב-CSS להצגה מלאה
+            canvasRef.current.style.width = window.innerWidth + 'px';
+            canvasRef.current.style.height = window.innerHeight + 'px';
+
             engineRef.current = new GameEngine(
                 canvasRef.current,
                 { 
@@ -383,7 +391,13 @@ function App() {
   };
 
   useEffect(() => {
-      const handleResize = () => { if(engineRef.current) engineRef.current.resize(window.innerWidth, window.innerHeight); };
+      const handleResize = () => {
+        if(engineRef.current) {
+          const maxCanvasWidth = isMobile ? window.innerWidth : Math.min(window.innerWidth, 1920);
+          const maxCanvasHeight = isMobile ? window.innerHeight : Math.min(window.innerHeight, 1080);
+          engineRef.current.resize(maxCanvasWidth, maxCanvasHeight);
+        }
+      };
       
       const handleMove = (e: any) => {
           if(!engineRef.current || gameState !== 'PLAYING' || isInputOnUI.current || isUnitComplete) return;

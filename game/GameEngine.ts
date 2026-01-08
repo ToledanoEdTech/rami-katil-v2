@@ -266,7 +266,7 @@ export class GameEngine {
         this.updateEnemies(dt);
         this.updateHazards(dt);
         this.updateBonuses(dt);
-        this.updateJetParticles(dt);
+        // this.updateJetParticles(dt); // Disabled - no trail effect
     }
     
     this.particlePool.forEach(p => { if(p.active) p.update(dt); });
@@ -553,7 +553,7 @@ export class GameEngine {
 
   drawPlayer() {
       // Draw engine particles first (behind the ship)
-      this.drawJetParticles();
+      // this.drawJetParticles(); // Disabled - no trail effect
 
       this.ctx.save(); this.ctx.translate(this.player.x, this.player.y);
 

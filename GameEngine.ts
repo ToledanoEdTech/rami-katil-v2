@@ -51,8 +51,8 @@ export class GameEngine {
   
   player: { x: number; y: number; width: number; height: number; isHit: boolean };
   
-  enemyPool: PoolableEnemy[] = Array.from({length: 30}, () => new PoolableEnemy());
-  projectilePool: PoolableProjectile[] = Array.from({length: 120}, () => new PoolableProjectile());
+  enemyPool: PoolableEnemy[] = Array.from({length: 15}, () => new PoolableEnemy()); // Reduced for performance
+  projectilePool: PoolableProjectile[] = Array.from({length: 60}, () => new PoolableProjectile()); // Reduced for performance
   particlePool: Particle[] = Array.from({length: 500}, () => new Particle());
   
   bossProjectiles: any[] = [];
@@ -158,10 +158,13 @@ export class GameEngine {
 
   initParallax() {
     this.starLayers = [[], [], []];
+    const isHighRes = this.width > 1200; // מחשבים עם רזולוציה גבוהה
+    const starMultiplier = isHighRes ? 0.5 : 1; // הפחת מספר כוכבים ברזולוציות גבוהות
+
     const layerConfigs = [
-        { count: 120, speed: 0.1, size: 1, alpha: 0.2 },
-        { count: 80, speed: 0.8, size: 1.2, alpha: 0.4 },
-        { count: 50, speed: 3.0, size: 1.8, alpha: 0.6 }
+        { count: Math.floor(120 * starMultiplier), speed: 0.1, size: 1, alpha: 0.2 },
+        { count: Math.floor(80 * starMultiplier), speed: 0.8, size: 1.2, alpha: 0.4 },
+        { count: Math.floor(50 * starMultiplier), speed: 3.0, size: 1.8, alpha: 0.6 }
     ];
     layerConfigs.forEach((lc, i) => {
         for(let j=0; j<lc.count; j++) {
@@ -182,9 +185,9 @@ export class GameEngine {
   }
 
   updateJetParticles(dt: number) {
-      // Optimized ion/plasma energy streams - reduced particle count
-      const streamLength = 12; // Shorter for performance
-      const segmentSpacing = 8; // Less frequent updates
+      // Drastically reduced particle count for performance
+      const streamLength = 4; // Reduced from 12 to 4
+      const segmentSpacing = 15; // Less frequent updates (increased from 8)
 
       // Engine color based on skin - cached
       if (!this.cachedEngineColor || this.cachedEngineColor.skin !== this.config.skin) {
@@ -197,7 +200,7 @@ export class GameEngine {
           };
       }
 
-      // Add new plasma segments less frequently
+      // Add new plasma segments much less frequently
       if (this.jetParticles.length < streamLength * 2 &&
           (!this.jetParticles.length || this.jetParticles[this.jetParticles.length - 1].y - this.player.y > segmentSpacing)) {
 
@@ -206,8 +209,8 @@ export class GameEngine {
               y: this.player.y + 37,
               vx: 0,
               vy: 0,
-              alpha: 0.3, // Reduced opacity
-              size: 1.8, // Smaller size
+              alpha: 0.4, // Slightly increased for visibility
+              size: 1.2, // Smaller size
               life: streamLength
           });
 
@@ -216,20 +219,20 @@ export class GameEngine {
               y: this.player.y + 37,
               vx: 0,
               vy: 0,
-              alpha: 0.3,
-              size: 1.8,
+              alpha: 0.4,
+              size: 1.2,
               life: streamLength
           });
       }
 
-      // Update plasma segments - optimized loop
+      // Update plasma segments - simplified
       for (let i = this.jetParticles.length - 1; i >= 0; i--) {
           const p = this.jetParticles[i];
-          p.life -= dt * 0.4;
-          p.alpha -= 0.003 * dt;
+          p.life -= dt * 0.6; // Faster decay
+          p.alpha -= 0.005 * dt;
 
-          p.y += 3.0 * dt;
-          p.x += (this.player.x - p.x) * 0.01 * dt;
+          p.y += 4.0 * dt; // Faster movement
+          // Removed complex x movement for performance
 
           if (p.life <= 0 || p.alpha <= 0) {
               this.jetParticles.splice(i, 1);
@@ -265,7 +268,12 @@ export class GameEngine {
     const isMobile = this.width < 600;
     let count = (this.config.difficulty === 'easy' ? 3 : this.config.difficulty === 'medium' ? 4 : 5);
     if (isMobile && count > 4) count = 4;
-    
+
+    // Performance optimization: reduce enemy count on high-res displays
+    if (!isMobile && this.width > 1200) {
+      count = Math.max(3, count - 1); // Reduce by 1 enemy on high-res desktops
+    }
+
     if (this.config.modifier === 'density' || this.config.modifier === 'final') count += 1;
 
     let speed = (this.config.difficulty === 'easy' ? 1.4 : this.config.difficulty === 'medium' ? 2.0 : 3.0) + (this.level * 0.08);
@@ -312,7 +320,7 @@ export class GameEngine {
     if (this.shakeAmount > 0.1) this.shakeAmount *= Math.pow(0.88, dt); else this.shakeAmount = 0;
 
     this.updateParallax(dt);
-    this.updateJetParticles(dt);
+    // this.updateJetParticles(dt); // Disabled - no trail effect
 
     if (this.playerExploding) {
         this.explosionTimer -= dt;
@@ -524,13 +532,26 @@ export class GameEngine {
     this.ctx.fillStyle = '#020617'; this.ctx.fillRect(0, 0, this.width, this.height);
     this.ctx.save();
     if (this.shakeAmount > 0.1) this.ctx.translate((Math.random()-0.5)*this.shakeAmount, (Math.random()-0.5)*this.shakeAmount);
-    this.drawBackgroundTheme();
-    this.starLayers.forEach(layer => {
-        layer.forEach(s => {
-            this.ctx.globalAlpha = s.alpha; this.ctx.fillStyle = 'white';
-            this.ctx.beginPath(); this.ctx.arc(s.x, s.y, s.size, 0, Math.PI*2); this.ctx.fill();
-        });
-    });
+
+    // אופטימיזציה: צייר רקע מורכב רק כל כמה פרימים ברזולוציות גבוהות
+    const isHighRes = this.width > 1200;
+    const shouldDrawComplexBg = !isHighRes || (this.gameFrame % 2 === 0); // כל פריים ברזולוציה נמוכה, כל שני פרימים בגבוהה
+
+    if (shouldDrawComplexBg) {
+      this.drawBackgroundTheme();
+      this.starLayers.forEach(layer => {
+          layer.forEach(s => {
+              this.ctx.globalAlpha = s.alpha; this.ctx.fillStyle = 'white';
+              this.ctx.beginPath(); this.ctx.arc(s.x, s.y, s.size, 0, Math.PI*2); this.ctx.fill();
+          });
+      });
+    } else {
+      // רקע פשוט כשלא מציירים את הרקע המורכב
+      this.ctx.globalAlpha = 0.1;
+      this.ctx.fillStyle = '#1e293b';
+      this.ctx.fillRect(0, this.height - 200, this.width, 200);
+    }
+
     this.ctx.globalAlpha = 1;
     this.drawEntities();
     this.ctx.restore();
@@ -591,15 +612,13 @@ export class GameEngine {
       this.ctx.save();
       this.ctx.globalCompositeOperation = 'lighter';
 
-      // Use cached color
+      // Use cached color - no shadows for performance
       const plasmaColor = this.cachedEngineColor.color;
 
-      // Optimized single-pass drawing
+      // Simplified drawing - no shadows, reduced operations
       this.ctx.strokeStyle = plasmaColor;
       this.ctx.lineCap = 'round';
-      this.ctx.shadowBlur = 6;
-      this.ctx.shadowColor = plasmaColor;
-      this.ctx.lineWidth = 2.0; // Fixed width for performance
+      this.ctx.lineWidth = 1.5; // Thinner lines
 
       // Draw all segments in one go - left engine
       const leftParticles = this.jetParticles.filter((_, i) => i % 2 === 0);
@@ -608,7 +627,7 @@ export class GameEngine {
               const p1 = leftParticles[i];
               const p2 = leftParticles[i + 1];
 
-              this.ctx.globalAlpha = p1.alpha * 0.5;
+              this.ctx.globalAlpha = p1.alpha * 0.6;
               this.ctx.beginPath();
               this.ctx.moveTo(p1.x, p1.y);
               this.ctx.lineTo(p2.x, p2.y);
@@ -623,7 +642,7 @@ export class GameEngine {
               const p1 = rightParticles[i];
               const p2 = rightParticles[i + 1];
 
-              this.ctx.globalAlpha = p1.alpha * 0.5;
+              this.ctx.globalAlpha = p1.alpha * 0.6;
               this.ctx.beginPath();
               this.ctx.moveTo(p1.x, p1.y);
               this.ctx.lineTo(p2.x, p2.y);
@@ -631,22 +650,21 @@ export class GameEngine {
           }
       }
 
-      // Reduced glow effect
-      this.ctx.shadowBlur = 8;
-      this.ctx.globalAlpha = 0.4;
+      // Simple glow effect - no shadows
+      this.ctx.globalAlpha = 0.3;
       this.ctx.fillStyle = plasmaColor;
 
-      // Only glow the last particle of each engine
+      // Only draw the last particle of each engine
       if (leftParticles.length > 0) {
           const p = leftParticles[leftParticles.length - 1];
           this.ctx.beginPath();
-          this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+          this.ctx.arc(p.x, p.y, p.size * 0.8, 0, Math.PI*2);
           this.ctx.fill();
       }
       if (rightParticles.length > 0) {
           const p = rightParticles[rightParticles.length - 1];
           this.ctx.beginPath();
-          this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+          this.ctx.arc(p.x, p.y, p.size * 0.8, 0, Math.PI*2);
           this.ctx.fill();
       }
 
@@ -654,7 +672,11 @@ export class GameEngine {
   }
 
   drawEntities() {
-      this.particlePool.forEach(p => { if (p.active) { this.ctx.globalAlpha = p.alpha; this.ctx.fillStyle = p.color; this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill(); } });
+      // Performance optimization: draw particles less frequently on high-res displays
+      const isHighRes = this.width > 1200;
+      if (!isHighRes || this.gameFrame % 2 === 0) { // Draw every frame on low-res, every 2nd frame on high-res
+        this.particlePool.forEach(p => { if (p.active) { this.ctx.globalAlpha = p.alpha; this.ctx.fillStyle = p.color; this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill(); } });
+      }
       this.ctx.globalAlpha = 1;
       this.enemyPool.forEach(e => { if (e.active) {
           if (this.config.modifier === 'blink' || (this.config.modifier === 'final' && this.gameFrame % 100 < 20)) {
@@ -672,17 +694,26 @@ export class GameEngine {
       });
       if (!this.playerExploding) this.drawPlayer();
       // Draw jet particles after player
-      this.drawJetParticles();
+      // this.drawJetParticles(); // Disabled - no trail effect
       this.bossProjectiles.forEach(p => {
           if (!p) return;
-          this.ctx.save(); this.ctx.fillStyle = '#ef4444'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = '#ef4444';
+          this.ctx.save();
+          this.ctx.fillStyle = '#ef4444';
+          // Performance optimization: reduce shadow on high-res displays
+          if (this.width <= 1200) {
+            this.ctx.shadowBlur = 20; this.ctx.shadowColor = '#ef4444';
+          }
           this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 15, 0, Math.PI*2); this.ctx.fill(); this.ctx.restore();
           if(Math.hypot(p.x - this.player.x, p.y - this.player.y) < 32) { this.handleMiss(); p.y = 5000; }
       });
       this.bossProjectiles = this.bossProjectiles.filter(p => p.y < this.height + 50);
       this.ctx.save();
       this.ctx.globalCompositeOperation = 'lighter';
-      this.projectilePool.forEach(p => { if (p.active) this.drawProjectile(p); });
+      // Performance optimization: draw projectiles less frequently on high-res
+      const shouldDrawProjectiles = !isHighRes || this.gameFrame % 2 === 0;
+      if (shouldDrawProjectiles) {
+        this.projectilePool.forEach(p => { if (p.active) this.drawProjectile(p); });
+      }
       this.ctx.restore();
   }
 
@@ -690,7 +721,11 @@ export class GameEngine {
       this.ctx.save(); this.ctx.translate(this.player.x, this.player.y);
       if (this.shieldStrength > 0) {
           const color = this.shieldStrength === 2 ? '#3b82f6' : '#93c5fd';
-          this.ctx.strokeStyle = color; this.ctx.lineWidth = 4; this.ctx.shadowBlur = 25; this.ctx.shadowColor = color;
+          this.ctx.strokeStyle = color; this.ctx.lineWidth = 4;
+          // Performance optimization: reduce shadow on high-res displays
+          if (this.width <= 1200) {
+            this.ctx.shadowBlur = 25; this.ctx.shadowColor = color;
+          }
           this.ctx.beginPath(); this.ctx.arc(0, 0, 45, 0, Math.PI*2); this.ctx.stroke();
           this.ctx.globalAlpha = 0.1; this.ctx.fillStyle = color; this.ctx.fill(); this.ctx.globalAlpha = 1;
       }
@@ -701,9 +736,10 @@ export class GameEngine {
   renderShip() {
       const skin = this.config.skin;
       const isMobile = this.width < 600;
+      const isHighRes = this.width > 1200;
       const scale = isMobile ? 0.55 : 0.75;
       const time = this.gameFrame * 0.02; // Animation time
-      const pulse = Math.sin(time) * 0.2 + 0.8; // Subtle pulsing animation
+      const pulse = isHighRes ? 1.0 : Math.sin(time) * 0.2 + 0.8; // No pulsing on high-res for performance
 
       // Define futuristic color schemes for each skin
       let primary = '#00ffff', secondary = '#0088aa', accent = '#ff00ff', engine = '#00aaff', metallic = '#e0e0ff', glow = '#00ffff';
@@ -946,28 +982,30 @@ export class GameEngine {
       this.ctx.ellipse(0, -20, 75, 50, 0, 0, Math.PI*2);
       this.ctx.fill();
 
-      // === REDUCED FLOATING PARTICLES ===
-      // Fewer particles for performance
-      this.ctx.fillStyle = glow;
-      this.ctx.globalAlpha = 0.6;
-      for(let i=0; i<4; i++) { // Reduced from 6 to 4
-          const angle = (time * 0.6 + i/4 * Math.PI * 2) % (Math.PI * 2);
-          const distance = 50 + Math.sin(time * 1.2 + i) * 6; // Smaller variation
-          const x = Math.cos(angle) * distance;
-          const y = Math.sin(angle) * distance - 15;
-          this.ctx.beginPath();
-          this.ctx.arc(x, y, 1.0, 0, Math.PI*2); // Smaller size
-          this.ctx.fill();
+      // === MINIMAL FLOATING PARTICLES ===
+      // Skip particles on high-res for performance
+      if (!isHighRes) {
+        this.ctx.fillStyle = glow;
+        this.ctx.globalAlpha = 0.5;
+        for(let i=0; i<2; i++) { // Reduced from 4 to 2
+            const angle = (time * 0.4 + i/2 * Math.PI * 2) % (Math.PI * 2);
+            const distance = 45; // Fixed distance for performance
+            const x = Math.cos(angle) * distance;
+            const y = Math.sin(angle) * distance - 15;
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, 0.8, 0, Math.PI*2); // Smaller size
+            this.ctx.fill();
+        }
+        this.ctx.globalAlpha = 1;
       }
-      this.ctx.globalAlpha = 1;
 
-      // === FINAL ENERGY PULSE ===
-      // Only on certain frames for performance
-      if (this.gameFrame % 3 === 0) { // Every 3rd frame
+      // === REDUCED ENERGY PULSE ===
+      // Skip on high-res for performance
+      if (!isHighRes && this.gameFrame % 5 === 0) { // Skip on high-res, every 5th frame on low-res
           this.ctx.globalCompositeOperation = 'lighter';
           this.ctx.fillStyle = this.shipGradients.pulse;
           this.ctx.beginPath();
-          this.ctx.ellipse(0, -20, 60, 45, 0, 0, Math.PI*2);
+          this.ctx.ellipse(0, -20, 50, 35, 0, 0, Math.PI*2); // Smaller pulse
           this.ctx.fill();
           this.ctx.globalCompositeOperation = 'source-over';
       }
@@ -985,15 +1023,31 @@ export class GameEngine {
   }
 
   drawEnemy(e: any) {
-      this.ctx.save(); this.ctx.translate(e.x, e.y); this.ctx.rotate(e.rotation);
-      const grad = this.ctx.createRadialGradient(0, 0, 5, 0, 0, e.radius);
-      grad.addColorStop(0, '#475569'); grad.addColorStop(1, '#020617');
-      this.ctx.fillStyle = grad; this.ctx.beginPath(); 
-      for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; const r = e.radius * (i % 2 === 0 ? 1 : 0.88); this.ctx.lineTo(Math.cos(angle)*r, Math.sin(angle)*r); }
-      this.ctx.closePath(); this.ctx.fill();
-      this.ctx.strokeStyle = '#94a3b8'; this.ctx.lineWidth = 1.5; this.ctx.stroke();
-      this.ctx.rotate(-e.rotation); this.ctx.fillStyle = 'white'; 
-      this.ctx.font = `bold ${this.width < 500 ? '14px' : '18px'} Rubik`; 
+      this.ctx.save(); this.ctx.translate(e.x, e.y);
+
+      // Performance optimization: simplified enemy drawing for high-res displays
+      const isHighRes = this.width > 1200;
+      if (isHighRes) {
+        // Simple rectangle for high-res performance
+        this.ctx.fillStyle = '#475569';
+        this.ctx.fillRect(-e.radius, -e.radius, e.radius * 2, e.radius * 2);
+        this.ctx.strokeStyle = '#94a3b8';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(-e.radius, -e.radius, e.radius * 2, e.radius * 2);
+      } else {
+        // Full star drawing for mobile/low-res
+        this.ctx.rotate(e.rotation);
+        const grad = this.ctx.createRadialGradient(0, 0, 5, 0, 0, e.radius);
+        grad.addColorStop(0, '#475569'); grad.addColorStop(1, '#020617');
+        this.ctx.fillStyle = grad; this.ctx.beginPath();
+        for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; const r = e.radius * (i % 2 === 0 ? 1 : 0.88); this.ctx.lineTo(Math.cos(angle)*r, Math.sin(angle)*r); }
+        this.ctx.closePath(); this.ctx.fill();
+        this.ctx.strokeStyle = '#94a3b8'; this.ctx.lineWidth = 1.5; this.ctx.stroke();
+        this.ctx.rotate(-e.rotation);
+      }
+
+      this.ctx.fillStyle = 'white';
+      this.ctx.font = `bold ${this.width < 500 ? '14px' : '18px'} Rubik`;
       this.ctx.textAlign = 'center';
       this.ctx.fillText(e.text, 0, 8); this.ctx.restore();
   }
@@ -1058,24 +1112,43 @@ export class GameEngine {
           } else if (this.level === 8) { // Koy
               for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
           } else if (this.level === 15) { // Shed
-              for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
+              const isHighRes = this.width > 1200;
+              const count = isHighRes ? 8 : 12; // Reduce from 12 to 8 on high-res
+              for(let i=0; i<count; i++) { const angle = (i/count) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
           } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
-              // יריות מכוונות לשחקן (5 יריות)
+              const isHighRes = this.width > 1200;
+              const projectileCount = isHighRes ? 0.6 : 1; // Reduce projectiles on high-res
+
+              // יריות מכוונות לשחקן (5 יריות -> 3 on high-res)
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
-              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
+              const aimedCount = Math.floor(5 * projectileCount);
+              for(let i=0; i<aimedCount; i++) {
+                const offset = aimedCount > 1 ? (i - (aimedCount-1)/2) * 0.4 : 0;
+                this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+offset)*5, vx: Math.cos(ang+offset)*5});
+              }
 
-              // יריות מעגליות (8 יריות)
-              for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5}); }
+              // יריות מעגליות (8 יריות -> 5 on high-res)
+              const circleCount = Math.floor(8 * projectileCount);
+              for(let i=0; i<circleCount; i++) {
+                const angle = (i/circleCount) * Math.PI * 2;
+                this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5});
+              }
 
-              // יריות מתפזרות לצדדים (4 יריות)
-              for(let i=-1; i<=2; i++) this.bossProjectiles.push({x: b.x + i*80, y: b.y + 100, vy: 4.5, vx: i * 0.3});
+              // יריות מתפזרות לצדדים (4 יריות -> 2 on high-res)
+              const spreadCount = Math.floor(4 * projectileCount);
+              for(let i=0; i<spreadCount; i++) {
+                const side = i % 2 === 0 ? -1 : 1;
+                this.bossProjectiles.push({x: b.x + side*80, y: b.y + 100, vy: 4.5, vx: side * 0.3});
+              }
           } else if (this.level === 29) { // Agirat
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
               for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
           } else if (this.level === 36) { // Leviathan
               for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
           } else { // Ziz
-              for(let i=0; i<8; i++) { const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
+              const isHighRes = this.width > 1200;
+              const count = isHighRes ? 5 : 8; // Reduce from 8 to 5 on high-res
+              for(let i=0; i<count; i++) { const ang = (this.gameFrame*0.1) + (i/count)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
           }
           Sound.play('shoot');
       }
@@ -1107,7 +1180,11 @@ export class GameEngine {
       else this.drawZiz();
       const names = ["", "תנינא", "כוי", "שד", "אשמדאי", "אגירת", "לויתן", "זיז שדי"];
       const bName = names[typeIdx] || "מזיק";
-      this.ctx.fillStyle = 'white'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
+      this.ctx.fillStyle = 'white';
+      // Performance optimization: reduce shadow on high-res displays
+      if (this.width <= 1200) {
+        this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
+      }
       this.ctx.font = 'bold 46px Frank Ruhl Libre'; this.ctx.textAlign = 'center'; this.ctx.fillText(bName, 0, 30);
       this.ctx.restore();
   }
