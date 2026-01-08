@@ -704,9 +704,9 @@ const equipSkin = (id: string) => {
                   {/* Credit Section */}
                   <div className="mt-4 flex flex-col items-center justify-center opacity-80 hover:opacity-100 transition-opacity pb-8">
                       <span className="text-amber-500/80 text-[10px] md:text-xs font-bold tracking-widest mb-1">נוצר ע"י יוסף טולידנו</span>
-                      <img 
-                          src="https://drive.google.com/thumbnail?id=13maxgzwHxpq9fS3sPR50AKYo-8nz1xZQ&sz=w200" 
-                          alt="Yosef Toledano Logo" 
+                      <img
+                          src="https://drive.google.com/thumbnail?id=1Tu5_e7jgTsQHCr0yV_8d-9CbWwOwL7UM&sz=w1000"
+                          alt="Yosef Toledano Logo"
                           className="h-12 md:h-16 w-auto object-contain drop-shadow-lg"
                       />
                   </div>
