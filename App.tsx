@@ -985,7 +985,60 @@ const equipSkin = (id: string) => {
                                   ${equipped ? 'border-amber-400 bg-amber-900/20 shadow-lg' : 'border-slate-800 bg-slate-900/50'}
                                   ${locked ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:scale-105 hover:border-amber-500/30'}
                               `}>
-                                <div className="text-3xl md:text-7xl mb-2 md:mb-6 transform group-hover:scale-110 transition-transform">{item.icon}</div>
+                                {/* תצוגה גדולה ואחידה לכל סוג פריט (סקין או חפץ) */}
+{(() => {
+  if (item.type === 'skin') {
+    return (
+      <img
+        src={
+          item.id === 'skin_default' ? '/ships/default.png' :
+          item.id === 'skin_gold' ? '/ships/gold.png' :
+          item.id === 'skin_torah' ? '/ships/torah.png' :
+          item.id === 'skin_butzina' ? '/ships/butzina.png' :
+          item.id === 'skin_choshen' ? '/ships/choshen.png' : undefined
+        }
+        alt={item.name}
+        className="w-24 h-24 md:w-40 md:h-40 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
+        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
+      />
+    );
+  }
+  if (item.id === 'upgrade_bomb') {
+    return (
+      <img
+        src={'/ships/bomb.png'}
+        alt={item.name}
+        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
+        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
+      />
+    );
+  }
+  if (item.id === 'item_shield') {
+    return (
+      <img
+        src={'/ships/shield.png'}
+        alt={item.name}
+        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
+        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
+      />
+    );
+  }
+  if (item.id === 'item_freeze') {
+    return (
+      <img
+        src={'/ships/freeze.png'}
+        alt={item.name}
+        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
+        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
+      />
+    );
+  }
+  // ברירת מחדל רק לאייטמים אחרים (אימוג'י)
+  return (
+    <div className="text-3xl md:text-7xl mb-2 md:mb-6 transform group-hover:scale-110 transition-transform">{item.icon}</div>
+  );
+})()}
+
                                 <h3 className="font-black text-white text-[11px] md:text-2xl mb-1 md:mb-2">{item.name}</h3>
                                 <p className="text-[8px] md:text-sm text-slate-400 mb-2 md:mb-6 flex-1 line-clamp-2">{item.desc}</p>
                                 <div className={`w-full py-1.5 md:py-3 rounded-lg md:rounded-xl font-black text-[10px] md:text-base flex items-center justify-center gap-1 md:gap-2 ${owned && item.type === 'skin' ? (equipped ? 'bg-green-600' : 'bg-slate-700') : 'bg-amber-600'}`}>

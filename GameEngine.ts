@@ -49,7 +49,7 @@ export class GameEngine {
   activeDictionary: Word[] = [];
   currentDeck: Word[] = [];
   
-  player: { x: number; y: number; width: number; height: number; isHit: boolean };
+  player: { x: number; y: number; width: number; height: number; isHit: boolean; tilt: number; targetTilt: number; horizontalVelocity: number; lastX: number; lastY: number };
   
   enemyPool: PoolableEnemy[] = Array.from({length: 15}, () => new PoolableEnemy()); // Reduced for performance
   projectilePool: PoolableProjectile[] = Array.from({length: 60}, () => new PoolableProjectile()); // Reduced for performance
@@ -68,6 +68,10 @@ export class GameEngine {
   // Cached gradients for performance
   shipGradients: any = null;
   cachedEngineColor: any = null;
+
+  // Texture system for spaceship sprites
+  shipTextures: { [key: string]: HTMLImageElement | null } = {};
+  texturesLoaded: boolean = false;
 
   score: number = 0;
   level: number = 1;
@@ -122,7 +126,7 @@ export class GameEngine {
     const isMobile = this.width < 600;
     const pW = isMobile ? 18 : 24;
     const pH = isMobile ? 18 : 24;
-    this.player = { x: this.width / 2, y: this.height - (isMobile ? 180 : 150), width: pW, height: pH, isHit: false };
+    this.player = { x: this.width / 2, y: this.height - (isMobile ? 180 : 150), width: pW, height: pH, isHit: false, tilt: 0, targetTilt: 0, horizontalVelocity: 0, lastX: this.width / 2, lastY: this.height - (isMobile ? 180 : 150) };
     
     if (config.customDictionary && config.customDictionary.length > 0) {
       this.activeDictionary = config.customDictionary;
@@ -135,7 +139,47 @@ export class GameEngine {
     this.currentDeck = [...this.activeDictionary];
 
     this.initParallax();
+    this.loadShipTextures();
     this.startRound();
+  }
+
+  loadShipTextures() {
+    const skinTextureMap: { [key: string]: string } = {
+      'skin_default': '/ships/default.png',
+      'skin_gold': '/ships/gold.png', // אור החמה
+      'skin_butzina': '/ships/butzina.png', // בוצינא קדישא
+      'skin_torah': '/ships/torah.png', // אש התורה
+      'skin_choshen': '/ships/choshen.png', // חושן המשפט
+      'skin_stealth': '/ships/stealth.png'
+    };
+
+    const skinsToLoad = Object.keys(skinTextureMap);
+    let loadedCount = 0;
+
+    skinsToLoad.forEach(skin => {
+      const texturePath = skinTextureMap[skin];
+      const img = new Image();
+
+      img.onload = () => {
+        this.shipTextures[skin] = img;
+        loadedCount++;
+        if (loadedCount === skinsToLoad.length) {
+          this.texturesLoaded = true;
+          console.log('All ship textures loaded successfully!');
+        }
+      };
+
+      img.onerror = () => {
+        console.warn(`Failed to load texture: ${texturePath}`);
+        this.shipTextures[skin] = null;
+        loadedCount++;
+        if (loadedCount === skinsToLoad.length) {
+          this.texturesLoaded = true;
+        }
+      };
+
+      img.src = texturePath;
+    });
   }
 
   applySkinWeapon() {
@@ -152,6 +196,9 @@ export class GameEngine {
     this.initParallax();
     const isMobile = this.width < 600;
     this.player.y = Math.max(this.height * 0.3, Math.min(this.player.y, this.height - (isMobile ? 120 : 100)));
+    // Update last position tracking after resize
+    this.player.lastX = this.player.x;
+    this.player.lastY = this.player.y;
   }
 
   togglePause() { this.isPaused = !this.isPaused; return this.isPaused; }
@@ -318,6 +365,22 @@ export class GameEngine {
     if (this.isPaused || this.isTransitioning) return;
     this.gameFrame += dt;
     if (this.shakeAmount > 0.1) this.shakeAmount *= Math.pow(0.88, dt); else this.shakeAmount = 0;
+
+    // Dramatic banking tilt interpolation - fast and responsive
+    const tiltLerpSpeed = 25.0; // Much faster for immediate response
+    const tiltDifference = this.player.targetTilt - this.player.tilt;
+    // Direct lerp without easing for snappy response
+    this.player.tilt += tiltDifference * Math.min(1, tiltLerpSpeed * dt);
+
+    // Quick return to center when not moving
+    if (Math.abs(this.player.horizontalVelocity) < 0.5) {
+      this.player.targetTilt *= 0.85; // Faster decay for snappy feel
+    }
+
+    // Add subtle banking shake for intense maneuvers
+    if (Math.abs(this.player.tilt) > 0.4) {
+      this.shakeAmount = Math.min(3, Math.abs(this.player.tilt) * 2);
+    }
 
     this.updateParallax(dt);
     // this.updateJetParticles(dt); // Disabled - no trail effect
@@ -718,7 +781,25 @@ export class GameEngine {
   }
 
   drawPlayer() {
-      this.ctx.save(); this.ctx.translate(this.player.x, this.player.y);
+      this.ctx.save();
+      // Add DRAMATIC horizontal offset based on tilt for enhanced 3D effect
+      const tiltOffset = this.player.tilt * 20; // Large horizontal shift for visibility
+      this.ctx.translate(this.player.x + tiltOffset, this.player.y);
+      // Apply tilt rotation for dramatic banking effect
+      this.ctx.rotate(this.player.tilt * 1.2); // Slight amplification for more visible banking
+
+      // Add DRAMATIC shadow effect for depth when tilted
+      if (Math.abs(this.player.tilt) > 0.05) {
+        this.ctx.save();
+        this.ctx.translate(-tiltOffset * 0.8, 4); // More pronounced shadow offset
+        this.ctx.globalAlpha = 0.4 + Math.abs(this.player.tilt) * 0.3; // Shadow opacity based on tilt
+        this.ctx.fillStyle = '#000000';
+        this.ctx.beginPath();
+        this.ctx.ellipse(0, 0, 35 + Math.abs(this.player.tilt) * 10, 18, 0, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.restore();
+      }
+
       if (this.shieldStrength > 0) {
           const color = this.shieldStrength === 2 ? '#3b82f6' : '#93c5fd';
           this.ctx.strokeStyle = color; this.ctx.lineWidth = 4;
@@ -741,276 +822,15 @@ export class GameEngine {
       const time = this.gameFrame * 0.02; // Animation time
       const pulse = isHighRes ? 1.0 : Math.sin(time) * 0.2 + 0.8; // No pulsing on high-res for performance
 
-      // Define futuristic color schemes for each skin
-      let primary = '#00ffff', secondary = '#0088aa', accent = '#ff00ff', engine = '#00aaff', metallic = '#e0e0ff', glow = '#00ffff';
-      if (skin === 'skin_default') {
-          primary = '#3b82f6'; secondary = '#1e3a8a'; accent = '#60a5fa'; engine = '#0ea5e9'; metallic = '#cbd5e1'; glow = '#3b82f6';
-      } else if (skin === 'skin_gold') {
-          primary = '#fbbf24'; secondary = '#92400e'; accent = '#f59e0b'; engine = '#eab308'; metallic = '#fef3c7'; glow = '#fbbf24';
-      } else if (skin === 'skin_stealth') {
-          primary = '#334155'; secondary = '#1e293b'; accent = '#64748b'; engine = '#475569'; metallic = '#94a3b8'; glow = '#64748b';
-      } else if (skin === 'skin_butzina') {
-          primary = '#a855f7'; secondary = '#6b21a8'; accent = '#c084fc'; engine = '#8b5cf6'; metallic = '#d8b4fe'; glow = '#a855f7';
+      // Try to use texture first, fallback to vector graphics
+      const shipTexture = this.shipTextures[skin];
+      if (shipTexture && this.texturesLoaded) {
+        this.renderShipWithTexture(shipTexture, scale);
+        return;
       }
 
-      this.ctx.save();
-      this.ctx.scale(scale, scale);
-
-      // Cache gradients to avoid recreating them every frame
-      if (!this.shipGradients || this.shipGradients.skin !== skin) {
-          this.shipGradients = {
-              skin: skin,
-              hull: this.ctx.createLinearGradient(-35, -60, 35, 40),
-              reflection: this.ctx.createLinearGradient(-20, -50, 20, -20),
-              canopy: this.ctx.createLinearGradient(0, -45, 0, -25),
-              core: this.ctx.createRadialGradient(0, 37, 0, 0, 37, 6),
-              aura: this.ctx.createRadialGradient(0, -20, 40, 0, -20, 80),
-              pulse: this.ctx.createRadialGradient(0, -20, 30, 0, -20, 60)
-          };
-
-          // Setup gradients once
-          const g = this.shipGradients;
-          g.hull.addColorStop(0, metallic);
-          g.hull.addColorStop(0.2, secondary);
-          g.hull.addColorStop(0.5, primary);
-          g.hull.addColorStop(0.8, secondary);
-          g.hull.addColorStop(1, metallic);
-
-          g.reflection.addColorStop(0, 'rgba(255,255,255,0.6)');
-          g.reflection.addColorStop(0.3, 'rgba(255,255,255,0.2)');
-          g.reflection.addColorStop(0.7, 'rgba(255,255,255,0.1)');
-          g.reflection.addColorStop(1, 'rgba(255,255,255,0.4)');
-
-          g.canopy.addColorStop(0, 'rgba(255,255,255,0.95)');
-          g.canopy.addColorStop(0.2, 'rgba(200,255,255,0.8)');
-          g.canopy.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, 0.6)`);
-          g.canopy.addColorStop(0.8, 'rgba(100,200,255,0.4)');
-          g.canopy.addColorStop(1, 'rgba(0,0,0,0.7)');
-
-          g.core.addColorStop(0, engine);
-          g.core.addColorStop(0.7, `rgba(${this.hexToRgb(engine).join(',')}, 0.6)`);
-          g.core.addColorStop(1, 'transparent');
-
-          g.aura.addColorStop(0, `rgba(${this.hexToRgb(primary).join(',')}, 0.08)`);
-          g.aura.addColorStop(0.3, `rgba(${this.hexToRgb(accent).join(',')}, 0.05)`);
-          g.aura.addColorStop(0.6, `rgba(${this.hexToRgb(glow).join(',')}, 0.03)`);
-          g.aura.addColorStop(1, 'transparent');
-
-          g.pulse.addColorStop(0, `rgba(${this.hexToRgb(glow).join(',')}, ${0.03 * pulse})`);
-          g.pulse.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, ${0.02 * pulse})`);
-          g.pulse.addColorStop(1, 'transparent');
-      }
-
-      // === OPTIMIZED SPACECRAFT DESIGN ===
-      // Main hull - simplified paths
-      this.ctx.fillStyle = this.shipGradients.hull;
-
-      // Upper hull - single optimized path
-      this.ctx.beginPath();
-      this.ctx.moveTo(0, -70);
-      this.ctx.lineTo(12, -55);
-      this.ctx.lineTo(25, -35);
-      this.ctx.lineTo(20, -10);
-      this.ctx.lineTo(15, 15);
-      this.ctx.lineTo(8, 25);
-      this.ctx.lineTo(-8, 25);
-      this.ctx.lineTo(-15, 15);
-      this.ctx.lineTo(-20, -10);
-      this.ctx.lineTo(-25, -35);
-      this.ctx.lineTo(-12, -55);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Lower hull - simplified
-      this.ctx.fillStyle = secondary;
-      this.ctx.beginPath();
-      this.ctx.moveTo(8, 25);
-      this.ctx.lineTo(15, 35);
-      this.ctx.lineTo(10, 45);
-      this.ctx.lineTo(-10, 45);
-      this.ctx.lineTo(-15, 35);
-      this.ctx.lineTo(-8, 25);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Simplified metallic highlights
-      this.ctx.fillStyle = this.shipGradients.reflection;
-      this.ctx.beginPath();
-      this.ctx.ellipse(0, -35, 12, 30, 0, 0, Math.PI*2);
-      this.ctx.fill();
-
-      // === FORWARD-SWEPT WINGS ===
-      this.ctx.fillStyle = this.shipGradients.hull;
-
-      // Left wing
-      this.ctx.beginPath();
-      this.ctx.moveTo(25, -35);
-      this.ctx.lineTo(55, -45);
-      this.ctx.lineTo(45, -25);
-      this.ctx.lineTo(35, -15);
-      this.ctx.lineTo(20, -10);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Right wing
-      this.ctx.beginPath();
-      this.ctx.moveTo(-25, -35);
-      this.ctx.lineTo(-55, -45);
-      this.ctx.lineTo(-45, -25);
-      this.ctx.lineTo(-35, -15);
-      this.ctx.lineTo(-20, -10);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Wing reinforcements - single stroke call
-      this.ctx.strokeStyle = metallic;
-      this.ctx.lineWidth = 2;
-      this.ctx.beginPath();
-      this.ctx.moveTo(25, -35);
-      this.ctx.lineTo(35, -40);
-      this.ctx.moveTo(-25, -35);
-      this.ctx.lineTo(-35, -40);
-      this.ctx.stroke();
-
-      // === OPTIMIZED NEON TRIM ===
-      // Reduced shadow operations, single pass for all trim
-      this.ctx.shadowBlur = 8 * pulse;
-      this.ctx.shadowColor = glow;
-      this.ctx.strokeStyle = glow;
-      this.ctx.lineWidth = 2.5;
-      this.ctx.lineCap = 'round';
-
-      this.ctx.beginPath();
-      // Hull edge
-      this.ctx.moveTo(12, -55);
-      this.ctx.lineTo(0, -70);
-      this.ctx.lineTo(-12, -55);
-      // Wing edges
-      this.ctx.moveTo(25, -35);
-      this.ctx.lineTo(55, -45);
-      this.ctx.moveTo(-25, -35);
-      this.ctx.lineTo(-55, -45);
-      // Engine housing
-      this.ctx.moveTo(10, 45);
-      this.ctx.lineTo(15, 35);
-      this.ctx.lineTo(-15, 35);
-      this.ctx.lineTo(-10, 45);
-      this.ctx.stroke();
-
-      this.ctx.shadowBlur = 0;
-
-      // === ADVANCED COCKPIT ===
-      this.ctx.fillStyle = this.shipGradients.canopy;
-      this.ctx.beginPath();
-      this.ctx.moveTo(-10, -45);
-      this.ctx.lineTo(0, -60);
-      this.ctx.lineTo(10, -45);
-      this.ctx.lineTo(12, -30);
-      this.ctx.lineTo(-12, -30);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Canopy frame
-      this.ctx.strokeStyle = metallic;
-      this.ctx.lineWidth = 1.5;
-      this.ctx.stroke();
-
-      // Energy conduits - simplified
-      this.ctx.shadowBlur = 6 * pulse;
-      this.ctx.shadowColor = accent;
-      this.ctx.strokeStyle = accent;
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(-8, -40);
-      this.ctx.lineTo(8, -40);
-      this.ctx.moveTo(-6, -35);
-      this.ctx.lineTo(6, -35);
-      this.ctx.stroke();
-      this.ctx.shadowBlur = 0;
-
-      // === ION ENGINES ===
-      this.ctx.fillStyle = secondary;
-
-      // Engine housings - simplified paths
-      this.ctx.beginPath();
-      this.ctx.moveTo(8, 25);
-      this.ctx.lineTo(18, 30);
-      this.ctx.lineTo(22, 40);
-      this.ctx.lineTo(15, 50);
-      this.ctx.lineTo(8, 45);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      this.ctx.beginPath();
-      this.ctx.moveTo(-8, 25);
-      this.ctx.lineTo(-18, 30);
-      this.ctx.lineTo(-22, 40);
-      this.ctx.lineTo(-15, 50);
-      this.ctx.lineTo(-8, 45);
-      this.ctx.closePath();
-      this.ctx.fill();
-
-      // Plasma cores - optimized with single gradient
-      this.ctx.shadowBlur = 15 * pulse;
-      this.ctx.shadowColor = engine;
-      this.ctx.fillStyle = this.shipGradients.core;
-
-      this.ctx.beginPath();
-      this.ctx.ellipse(17, 37, 6, 4, 0, 0, Math.PI*2);
-      this.ctx.fill();
-
-      this.ctx.beginPath();
-      this.ctx.ellipse(-17, 37, 6, 4, 0, 0, Math.PI*2);
-      this.ctx.fill();
-
-      this.ctx.shadowBlur = 0;
-
-      // Engine vents - simplified
-      this.ctx.strokeStyle = metallic;
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(12, 50);
-      this.ctx.lineTo(18, 55);
-      this.ctx.moveTo(-12, 50);
-      this.ctx.lineTo(-18, 55);
-      this.ctx.stroke();
-
-      // === ENERGY FIELD AURA ===
-      // Reduced complexity, single aura pass
-      this.ctx.fillStyle = this.shipGradients.aura;
-      this.ctx.beginPath();
-      this.ctx.ellipse(0, -20, 75, 50, 0, 0, Math.PI*2);
-      this.ctx.fill();
-
-      // === MINIMAL FLOATING PARTICLES ===
-      // Skip particles on high-res for performance
-      if (!isHighRes) {
-        this.ctx.fillStyle = glow;
-        this.ctx.globalAlpha = 0.5;
-        for(let i=0; i<2; i++) { // Reduced from 4 to 2
-            const angle = (time * 0.4 + i/2 * Math.PI * 2) % (Math.PI * 2);
-            const distance = 45; // Fixed distance for performance
-            const x = Math.cos(angle) * distance;
-            const y = Math.sin(angle) * distance - 15;
-            this.ctx.beginPath();
-            this.ctx.arc(x, y, 0.8, 0, Math.PI*2); // Smaller size
-            this.ctx.fill();
-        }
-        this.ctx.globalAlpha = 1;
-      }
-
-      // === REDUCED ENERGY PULSE ===
-      // Skip on high-res for performance
-      if (!isHighRes && this.gameFrame % 5 === 0) { // Skip on high-res, every 5th frame on low-res
-          this.ctx.globalCompositeOperation = 'lighter';
-          this.ctx.fillStyle = this.shipGradients.pulse;
-          this.ctx.beginPath();
-          this.ctx.ellipse(0, -20, 50, 35, 0, 0, Math.PI*2); // Smaller pulse
-          this.ctx.fill();
-          this.ctx.globalCompositeOperation = 'source-over';
-      }
-
-      this.ctx.restore();
+      // Fallback to vector graphics if texture not available
+      this.renderShipVector(skin, isMobile, isHighRes, scale, time, pulse);
   }
 
   hexToRgb(hex: string): number[] {
@@ -1607,14 +1427,36 @@ export class GameEngine {
       if (!this.isPaused && !this.isTransitioning) {
           this.player.x = Math.max(20, Math.min(this.width - 20, this.player.x + dx));
           this.player.y = Math.max(this.height * 0.4, Math.min(this.height - 100, this.player.y + dy));
+
+          // Update tilt based on horizontal movement - DRAMATIC banking effect
+          this.player.horizontalVelocity = dx;
+          // Set target tilt based on movement direction (-45 to +45 degrees for VISIBLE banking)
+          this.player.targetTilt = Math.max(-0.8, Math.min(0.8, dx * 0.12));
+
+          // Update last position for consistent tracking
+          this.player.lastX = this.player.x;
+          this.player.lastY = this.player.y;
       }
   }
 
-  setPlayerPos(x: number, y: number) { 
-      if (!this.isPaused && !this.isTransitioning) { 
-          this.player.x = x; 
-          this.player.y = Math.max(this.height * 0.4, Math.min(y, this.height - 100)); 
-      } 
+  setPlayerPos(x: number, y: number) {
+      if (!this.isPaused && !this.isTransitioning) {
+          // Calculate movement delta based on last position for accurate tilt
+          const dx = x - this.player.lastX;
+          const dy = y - this.player.lastY;
+
+          // Update tilt based on horizontal movement - DRAMATIC banking effect
+          this.player.horizontalVelocity = dx;
+          // Set target tilt based on movement direction (-45 to +45 degrees for VISIBLE banking)
+          this.player.targetTilt = Math.max(-0.8, Math.min(0.8, dx * 0.12));
+
+          // Update last position
+          this.player.lastX = x;
+          this.player.lastY = y;
+
+          this.player.x = x;
+          this.player.y = Math.max(this.height * 0.4, Math.min(y, this.height - 100));
+      }
   }
 
   startBossFight() {
@@ -1658,4 +1500,328 @@ export class GameEngine {
       this.isTransitioning = false;
       this.startRound();
   }
-}
+
+  renderShipWithTexture(texture: HTMLImageElement, scale: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+
+    // Calculate texture dimensions (assuming texture is designed for the ship size)
+    const textureWidth = 80; // Adjust based on your texture size
+    const textureHeight = 60; // Adjust based on your texture size
+
+    // Apply banking effects to texture rendering
+    const tiltOffset = this.player.tilt * 20;
+    this.ctx.translate(textureWidth / 2 + tiltOffset, textureHeight / 2);
+
+    // Apply rotation for banking effect
+    this.ctx.rotate(this.player.tilt * 1.2);
+
+    // Draw shadow if banking
+    if (Math.abs(this.player.tilt) > 0.05) {
+      this.ctx.save();
+      this.ctx.translate(-tiltOffset * 0.8, 4);
+      this.ctx.globalAlpha = 0.4 + Math.abs(this.player.tilt) * 0.3;
+      this.ctx.fillStyle = '#000000';
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, 0, 35 + Math.abs(this.player.tilt) * 10, 18, 0, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+
+    // Draw the texture
+    this.ctx.globalAlpha = 1.0;
+    this.ctx.drawImage(texture, -textureWidth / 2, -textureHeight / 2, textureWidth, textureHeight);
+
+    // Add glow effect for special weapons
+    if (this.weaponType !== 'normal') {
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = 0.3;
+      this.ctx.drawImage(texture, -textureWidth / 2, -textureHeight / 2, textureWidth, textureHeight);
+      this.ctx.globalCompositeOperation = 'source-over';
+      this.ctx.globalAlpha = 1.0;
+    }
+
+    this.ctx.restore();
+  }
+
+  renderShipVector(skin: string, isMobile: boolean, isHighRes: boolean, scale: number, time: number, pulse: number) {
+    // Define futuristic color schemes for each skin
+    let primary = '#00ffff', secondary = '#0088aa', accent = '#ff00ff', engine = '#00aaff', metallic = '#e0e0ff', glow = '#00ffff';
+    if (skin === 'skin_default') {
+        primary = '#3b82f6'; secondary = '#1e3a8a'; accent = '#60a5fa'; engine = '#0ea5e9'; metallic = '#cbd5e1'; glow = '#3b82f6';
+    } else if (skin === 'skin_gold') {
+        primary = '#fbbf24'; secondary = '#92400e'; accent = '#f59e0b'; engine = '#eab308'; metallic = '#fef3c7'; glow = '#fbbf24';
+    } else if (skin === 'skin_stealth') {
+        primary = '#334155'; secondary = '#1e293b'; accent = '#64748b'; engine = '#475569'; metallic = '#94a3b8'; glow = '#64748b';
+    } else if (skin === 'skin_butzina') {
+        primary = '#a855f7'; secondary = '#6b21a8'; accent = '#c084fc'; engine = '#8b5cf6'; metallic = '#d8b4fe'; glow = '#a855f7';
+    }
+
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+
+    // Cache gradients to avoid recreating them every frame
+    if (!this.shipGradients || this.shipGradients.skin !== skin) {
+        this.shipGradients = {
+            skin: skin,
+            hull: this.ctx.createLinearGradient(-35, -60, 35, 40),
+            reflection: this.ctx.createLinearGradient(-20, -50, 20, -20),
+            canopy: this.ctx.createLinearGradient(0, -45, 0, -25),
+            core: this.ctx.createRadialGradient(0, 37, 0, 0, 37, 6),
+            aura: this.ctx.createRadialGradient(0, -20, 40, 0, -20, 80),
+            pulse: this.ctx.createRadialGradient(0, -20, 30, 0, -20, 60)
+        };
+
+        // Setup gradients once
+        const g = this.shipGradients;
+        g.hull.addColorStop(0, metallic);
+        g.hull.addColorStop(0.2, secondary);
+        g.hull.addColorStop(0.5, primary);
+        g.hull.addColorStop(0.8, secondary);
+        g.hull.addColorStop(1, metallic);
+
+        g.reflection.addColorStop(0, 'rgba(255,255,255,0.6)');
+        g.reflection.addColorStop(0.3, 'rgba(255,255,255,0.2)');
+        g.reflection.addColorStop(0.7, 'rgba(255,255,255,0.1)');
+        g.reflection.addColorStop(1, 'rgba(255,255,255,0.4)');
+
+        g.canopy.addColorStop(0, 'rgba(255,255,255,0.95)');
+        g.canopy.addColorStop(0.2, 'rgba(200,255,255,0.8)');
+        g.canopy.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, 0.6)`);
+        g.canopy.addColorStop(0.8, 'rgba(100,200,255,0.4)');
+        g.canopy.addColorStop(1, 'rgba(0,0,0,0.7)');
+
+        g.core.addColorStop(0, engine);
+        g.core.addColorStop(0.7, `rgba(${this.hexToRgb(engine).join(',')}, 0.6)`);
+        g.core.addColorStop(1, 'transparent');
+
+        g.aura.addColorStop(0, `rgba(${this.hexToRgb(primary).join(',')}, 0.08)`);
+        g.aura.addColorStop(0.3, `rgba(${this.hexToRgb(accent).join(',')}, 0.05)`);
+        g.aura.addColorStop(0.6, `rgba(${this.hexToRgb(glow).join(',')}, 0.03)`);
+        g.aura.addColorStop(1, 'transparent');
+
+        g.pulse.addColorStop(0, `rgba(${this.hexToRgb(glow).join(',')}, ${0.03 * pulse})`);
+        g.pulse.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, ${0.02 * pulse})`);
+        g.pulse.addColorStop(1, 'transparent');
+    }
+
+    // === OPTIMIZED SPACECRAFT DESIGN ===
+    // Main hull - simplified paths
+    this.ctx.fillStyle = this.shipGradients.hull;
+
+    // Upper hull - single optimized path
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, -70);
+    this.ctx.lineTo(12, -55);
+    this.ctx.lineTo(25, -35);
+    this.ctx.lineTo(20, -10);
+    this.ctx.lineTo(15, 15);
+    this.ctx.lineTo(8, 25);
+    this.ctx.lineTo(-8, 25);
+    this.ctx.lineTo(-15, 15);
+    this.ctx.lineTo(-20, -10);
+    this.ctx.lineTo(-25, -35);
+    this.ctx.lineTo(-12, -55);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    // Lower hull - simplified
+    this.ctx.fillStyle = secondary;
+    this.ctx.beginPath();
+    this.ctx.moveTo(8, 25);
+    this.ctx.lineTo(15, 35);
+    this.ctx.lineTo(10, 45);
+    this.ctx.lineTo(-10, 45);
+    this.ctx.lineTo(-15, 35);
+    this.ctx.lineTo(-8, 25);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    // Simplified metallic highlights
+    this.ctx.fillStyle = this.shipGradients.reflection;
+    this.ctx.beginPath();
+    this.ctx.ellipse(0, -35, 12, 30, 0, 0, Math.PI*2);
+    this.ctx.fill();
+
+    // === FORWARD-SWEPT WINGS WITH TILT ANIMATION ===
+    this.ctx.fillStyle = this.shipGradients.hull;
+
+    // Left wing - DRAMATIC tilt effect and wing flex
+    this.ctx.save();
+    const leftWingFlex = this.player.tilt * 25; // Extreme wing flex for visibility
+    this.ctx.rotate(this.player.tilt * 0.8); // Wings tilt dramatically with body
+    this.ctx.beginPath();
+    this.ctx.moveTo(25, -35);
+    this.ctx.lineTo(55 + leftWingFlex, -45); // Wing tip moves with tilt
+    this.ctx.lineTo(45 + leftWingFlex * 0.7, -25);
+    this.ctx.lineTo(35, -15);
+    this.ctx.lineTo(20, -10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+
+    // Right wing - DRAMATIC tilt effect and wing flex
+    this.ctx.save();
+    const rightWingFlex = this.player.tilt * 25; // Extreme wing flex for visibility
+    this.ctx.rotate(this.player.tilt * 0.8); // Wings tilt dramatically with body
+    this.ctx.beginPath();
+    this.ctx.moveTo(-25, -35);
+    this.ctx.lineTo(-55 + rightWingFlex, -45); // Wing tip moves with tilt
+    this.ctx.lineTo(-45 + rightWingFlex * 0.7, -25);
+    this.ctx.lineTo(-35, -15);
+    this.ctx.lineTo(-20, -10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+
+    // Wing reinforcements - single stroke call
+    this.ctx.strokeStyle = metallic;
+    this.ctx.lineWidth = 2;
+    this.ctx.beginPath();
+    this.ctx.moveTo(25, -35);
+    this.ctx.lineTo(35, -40);
+    this.ctx.moveTo(-25, -35);
+    this.ctx.lineTo(-35, -40);
+    this.ctx.stroke();
+
+    // === OPTIMIZED NEON TRIM ===
+    // Reduced shadow operations, single pass for all trim
+    this.ctx.shadowBlur = 8 * pulse;
+    this.ctx.shadowColor = glow;
+    this.ctx.strokeStyle = glow;
+    this.ctx.lineWidth = 2.5;
+    this.ctx.lineCap = 'round';
+
+    this.ctx.beginPath();
+    // Hull edge
+    this.ctx.moveTo(12, -55);
+    this.ctx.lineTo(0, -70);
+    this.ctx.lineTo(-12, -55);
+    // Wing edges
+    this.ctx.moveTo(25, -35);
+    this.ctx.lineTo(55, -45);
+    this.ctx.moveTo(-25, -35);
+    this.ctx.lineTo(-55, -45);
+    // Engine housing
+    this.ctx.moveTo(10, 45);
+    this.ctx.lineTo(15, 35);
+    this.ctx.lineTo(-15, 35);
+    this.ctx.lineTo(-10, 45);
+    this.ctx.stroke();
+
+    this.ctx.shadowBlur = 0;
+
+    // === ADVANCED COCKPIT ===
+    this.ctx.fillStyle = this.shipGradients.canopy;
+    this.ctx.beginPath();
+    this.ctx.moveTo(-10, -45);
+    this.ctx.lineTo(0, -60);
+    this.ctx.lineTo(10, -45);
+    this.ctx.lineTo(12, -30);
+    this.ctx.lineTo(-12, -30);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    // Canopy frame
+    this.ctx.strokeStyle = metallic;
+    this.ctx.lineWidth = 1.5;
+    this.ctx.stroke();
+
+    // Energy conduits - simplified
+    this.ctx.shadowBlur = 6 * pulse;
+    this.ctx.shadowColor = accent;
+    this.ctx.strokeStyle = accent;
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(-8, -40);
+    this.ctx.lineTo(8, -40);
+    this.ctx.moveTo(-6, -35);
+    this.ctx.lineTo(6, -35);
+    this.ctx.stroke();
+    this.ctx.shadowBlur = 0;
+
+    // === ION ENGINES ===
+    this.ctx.fillStyle = secondary;
+
+    // Engine housings - simplified paths
+    this.ctx.beginPath();
+    this.ctx.moveTo(8, 25);
+    this.ctx.lineTo(18, 30);
+    this.ctx.lineTo(22, 40);
+    this.ctx.lineTo(15, 50);
+    this.ctx.lineTo(8, 45);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(-8, 25);
+    this.ctx.lineTo(-18, 30);
+    this.ctx.lineTo(-22, 40);
+    this.ctx.lineTo(-15, 50);
+    this.ctx.lineTo(-8, 45);
+    this.ctx.closePath();
+    this.ctx.fill();
+
+    // Plasma cores - DRAMATICALLY enhanced with tilt effect
+    const tiltBoost = 1 + Math.abs(this.player.tilt) * 2.0; // Engines glow MUCH more when tilting
+    this.ctx.shadowBlur = 25 * pulse * tiltBoost; // Increased base blur
+    this.ctx.shadowColor = engine;
+    this.ctx.fillStyle = this.shipGradients.core;
+
+    this.ctx.beginPath();
+    this.ctx.ellipse(17, 37, 6, 4, 0, 0, Math.PI*2);
+    this.ctx.fill();
+
+    this.ctx.beginPath();
+    this.ctx.ellipse(-17, 37, 6, 4, 0, 0, Math.PI*2);
+    this.ctx.fill();
+
+    this.ctx.shadowBlur = 0;
+
+    // Engine vents - simplified
+    this.ctx.strokeStyle = metallic;
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(12, 50);
+    this.ctx.lineTo(18, 55);
+    this.ctx.moveTo(-12, 50);
+    this.ctx.lineTo(-18, 55);
+    this.ctx.stroke();
+
+    // === ENERGY FIELD AURA ===
+    // Reduced complexity, single aura pass
+    this.ctx.fillStyle = this.shipGradients.aura;
+    this.ctx.beginPath();
+    this.ctx.ellipse(0, -20, 75, 50, 0, 0, Math.PI*2);
+    this.ctx.fill();
+
+    // === MINIMAL FLOATING PARTICLES ===
+    // Skip particles on high-res for performance
+    if (!isHighRes) {
+      this.ctx.fillStyle = glow;
+      this.ctx.globalAlpha = 0.5;
+      for(let i=0; i<2; i++) { // Reduced from 4 to 2
+          const angle = (time * 0.4 + i/2 * Math.PI * 2) % (Math.PI * 2);
+          const distance = 45; // Fixed distance for performance
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance - 15;
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, 0.8, 0, Math.PI*2); // Smaller size
+          this.ctx.fill();
+      }
+      this.ctx.globalAlpha = 1;
+    }
+
+    // === REDUCED ENERGY PULSE ===
+    // Skip on high-res for performance
+    if (!isHighRes && this.gameFrame % 5 === 0) { // Skip on high-res, every 5th frame on low-res
+        this.ctx.globalCompositeOperation = 'lighter';
+        this.ctx.fillStyle = this.shipGradients.pulse;
+        this.ctx.beginPath();
+        this.ctx.ellipse(0, -20, 50, 35, 0, 0, Math.PI*2); // Smaller pulse
+        this.ctx.fill();
+        this.ctx.globalCompositeOperation = 'source-over';
+    }
+
+    this.ctx.restore();
+  }
