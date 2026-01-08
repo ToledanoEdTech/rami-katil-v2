@@ -59,10 +59,15 @@ export class GameEngine {
   bonuses: any[] = [];
   hazards: any[] = [];
   boss: any = null;
-  bossDamageTaken: boolean = false; 
+  bossDamageTaken: boolean = false;
 
   starLayers: {x: number, y: number, size: number, speed: number, alpha: number}[][] = [[], [], []];
+  jetParticles: {x: number, y: number, vx: number, vy: number, alpha: number, size: number, life: number}[] = [];
   shakeAmount: number = 0;
+
+  // Cached gradients for performance
+  shipGradients: any = null;
+  cachedEngineColor: any = null;
 
   score: number = 0;
   level: number = 1;
@@ -176,6 +181,67 @@ export class GameEngine {
       }
   }
 
+  updateJetParticles(dt: number) {
+      // Optimized ion/plasma energy streams - reduced particle count
+      const streamLength = 12; // Shorter for performance
+      const segmentSpacing = 8; // Less frequent updates
+
+      // Engine color based on skin - cached
+      if (!this.cachedEngineColor || this.cachedEngineColor.skin !== this.config.skin) {
+          this.cachedEngineColor = {
+              skin: this.config.skin,
+              color: this.config.skin === 'skin_gold' ? '#fbbf24' :
+                     this.config.skin === 'skin_butzina' ? '#a855f7' :
+                     this.config.skin === 'skin_stealth' ? '#64748b' :
+                     this.config.skin === 'skin_default' ? '#3b82f6' : '#00ffff'
+          };
+      }
+
+      // Add new plasma segments less frequently
+      if (this.jetParticles.length < streamLength * 2 &&
+          (!this.jetParticles.length || this.jetParticles[this.jetParticles.length - 1].y - this.player.y > segmentSpacing)) {
+
+          this.jetParticles.push({
+              x: this.player.x - 17,
+              y: this.player.y + 37,
+              vx: 0,
+              vy: 0,
+              alpha: 0.3, // Reduced opacity
+              size: 1.8, // Smaller size
+              life: streamLength
+          });
+
+          this.jetParticles.push({
+              x: this.player.x + 17,
+              y: this.player.y + 37,
+              vx: 0,
+              vy: 0,
+              alpha: 0.3,
+              size: 1.8,
+              life: streamLength
+          });
+      }
+
+      // Update plasma segments - optimized loop
+      for (let i = this.jetParticles.length - 1; i >= 0; i--) {
+          const p = this.jetParticles[i];
+          p.life -= dt * 0.4;
+          p.alpha -= 0.003 * dt;
+
+          p.y += 3.0 * dt;
+          p.x += (this.player.x - p.x) * 0.01 * dt;
+
+          if (p.life <= 0 || p.alpha <= 0) {
+              this.jetParticles.splice(i, 1);
+          }
+      }
+
+      // Limit total particles
+      if (this.jetParticles.length > streamLength * 2) {
+          this.jetParticles.splice(0, this.jetParticles.length - streamLength * 2);
+      }
+  }
+
   startRound() {
     this.isTransitioning = false;
     if (this.enemyPool.some(e => e.active) || this.boss || this.playerExploding) return;
@@ -246,6 +312,7 @@ export class GameEngine {
     if (this.shakeAmount > 0.1) this.shakeAmount *= Math.pow(0.88, dt); else this.shakeAmount = 0;
 
     this.updateParallax(dt);
+    this.updateJetParticles(dt);
 
     if (this.playerExploding) {
         this.explosionTimer -= dt;
@@ -518,6 +585,74 @@ export class GameEngine {
     }
   }
 
+  drawJetParticles() {
+      if (this.jetParticles.length < 2) return;
+
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+
+      // Use cached color
+      const plasmaColor = this.cachedEngineColor.color;
+
+      // Optimized single-pass drawing
+      this.ctx.strokeStyle = plasmaColor;
+      this.ctx.lineCap = 'round';
+      this.ctx.shadowBlur = 6;
+      this.ctx.shadowColor = plasmaColor;
+      this.ctx.lineWidth = 2.0; // Fixed width for performance
+
+      // Draw all segments in one go - left engine
+      const leftParticles = this.jetParticles.filter((_, i) => i % 2 === 0);
+      if (leftParticles.length > 1) {
+          for (let i = 0; i < leftParticles.length - 1; i++) {
+              const p1 = leftParticles[i];
+              const p2 = leftParticles[i + 1];
+
+              this.ctx.globalAlpha = p1.alpha * 0.5;
+              this.ctx.beginPath();
+              this.ctx.moveTo(p1.x, p1.y);
+              this.ctx.lineTo(p2.x, p2.y);
+              this.ctx.stroke();
+          }
+      }
+
+      // Draw all segments - right engine
+      const rightParticles = this.jetParticles.filter((_, i) => i % 2 === 1);
+      if (rightParticles.length > 1) {
+          for (let i = 0; i < rightParticles.length - 1; i++) {
+              const p1 = rightParticles[i];
+              const p2 = rightParticles[i + 1];
+
+              this.ctx.globalAlpha = p1.alpha * 0.5;
+              this.ctx.beginPath();
+              this.ctx.moveTo(p1.x, p1.y);
+              this.ctx.lineTo(p2.x, p2.y);
+              this.ctx.stroke();
+          }
+      }
+
+      // Reduced glow effect
+      this.ctx.shadowBlur = 8;
+      this.ctx.globalAlpha = 0.4;
+      this.ctx.fillStyle = plasmaColor;
+
+      // Only glow the last particle of each engine
+      if (leftParticles.length > 0) {
+          const p = leftParticles[leftParticles.length - 1];
+          this.ctx.beginPath();
+          this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+          this.ctx.fill();
+      }
+      if (rightParticles.length > 0) {
+          const p = rightParticles[rightParticles.length - 1];
+          this.ctx.beginPath();
+          this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+          this.ctx.fill();
+      }
+
+      this.ctx.restore();
+  }
+
   drawEntities() {
       this.particlePool.forEach(p => { if (p.active) { this.ctx.globalAlpha = p.alpha; this.ctx.fillStyle = p.color; this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill(); } });
       this.ctx.globalAlpha = 1;
@@ -525,7 +660,7 @@ export class GameEngine {
           if (this.config.modifier === 'blink' || (this.config.modifier === 'final' && this.gameFrame % 100 < 20)) {
             this.ctx.globalAlpha = 0.3 + Math.abs(Math.sin(this.gameFrame * 0.1)) * 0.7;
           }
-          this.drawEnemy(e); 
+          this.drawEnemy(e);
           this.ctx.globalAlpha = 1;
         }
       });
@@ -536,6 +671,8 @@ export class GameEngine {
         this.ctx.fillText(h.text, h.x, h.y); this.ctx.restore();
       });
       if (!this.playerExploding) this.drawPlayer();
+      // Draw jet particles after player
+      this.drawJetParticles();
       this.bossProjectiles.forEach(p => {
           if (!p) return;
           this.ctx.save(); this.ctx.fillStyle = '#ef4444'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = '#ef4444';
@@ -564,198 +701,287 @@ export class GameEngine {
   renderShip() {
       const skin = this.config.skin;
       const isMobile = this.width < 600;
-      const scale = isMobile ? 0.55 : 0.75; 
-      if (skin === 'skin_choshen') {
-          this.ctx.save(); this.ctx.scale(scale, scale);
-          const w = 55, h = 70;
+      const scale = isMobile ? 0.55 : 0.75;
+      const time = this.gameFrame * 0.02; // Animation time
+      const pulse = Math.sin(time) * 0.2 + 0.8; // Subtle pulsing animation
 
-          // Enhanced golden frame with better glow
-          this.ctx.shadowBlur = 25; this.ctx.shadowColor = '#fbbf24';
-          this.ctx.fillStyle = '#fbbf24'; this.ctx.strokeStyle = '#92400e'; this.ctx.lineWidth = 3;
-          this.ctx.beginPath(); this.ctx.roundRect(-w/2, -h/2, w, h, 8); this.ctx.fill(); this.ctx.stroke();
-
-          // Inner shadow for depth
-          this.ctx.shadowBlur = 0; this.ctx.strokeStyle = 'rgba(0,0,0,0.2)'; this.ctx.strokeRect(-w/2 + 4, -h/2 + 4, w - 8, h - 8);
-
-          // Enhanced gems with better colors and effects
-          const colors = ['#ef4444', '#3b82f6', '#22c55e', '#a855f7', '#f97316', '#06b6d4', '#ec4899', '#84cc16', '#64748b', '#eab308', '#d946ef', '#f43f5e'];
-          const gemSize = 12; const paddingX = 16, paddingY = 16;
-          for(let row=0; row<4; row++) { for(let col=0; col<3; col++) {
-              const idx = row * 3 + col; const gx = -w/2 + paddingX + col * (w - 2*paddingX)/2; const gy = -h/2 + paddingY + row * (h - 2*paddingY)/3;
-              this.ctx.shadowBlur = 8; this.ctx.shadowColor = colors[idx]; this.ctx.fillStyle = colors[idx];
-              this.ctx.beginPath(); this.ctx.arc(gx, gy, gemSize/2, 0, Math.PI*2); this.ctx.fill();
-
-              // Enhanced gem highlights
-              this.ctx.fillStyle = 'rgba(255,255,255,0.6)'; this.ctx.beginPath(); this.ctx.arc(gx - 3, gy - 3, 2, 0, Math.PI*2); this.ctx.fill();
-              this.ctx.fillStyle = 'rgba(255,255,255,0.3)'; this.ctx.beginPath(); this.ctx.arc(gx + 2, gy + 2, 1.5, 0, Math.PI*2); this.ctx.fill();
-              this.ctx.shadowBlur = 0;
-          } }
-
-          // Add golden chain details
-          this.ctx.strokeStyle = '#92400e'; this.ctx.lineWidth = 2;
-          this.ctx.beginPath(); this.ctx.moveTo(-w/2 + 5, -h/2 + 5); this.ctx.lineTo(w/2 - 5, -h/2 + 5); this.ctx.stroke();
-          this.ctx.beginPath(); this.ctx.moveTo(-w/2 + 5, h/2 - 5); this.ctx.lineTo(w/2 - 5, h/2 - 5); this.ctx.stroke();
-
-          // Add divine light effect
-          const lightG = this.ctx.createRadialGradient(0, 0, 10, 0, 0, w/2 + 10);
-          lightG.addColorStop(0, 'rgba(251, 191, 36, 0.1)'); lightG.addColorStop(1, 'transparent');
-          this.ctx.fillStyle = lightG; this.ctx.beginPath(); this.ctx.arc(0, 0, w/2 + 10, 0, Math.PI*2); this.ctx.fill();
-
-          this.ctx.restore(); return;
-      }
-      if (skin === 'skin_torah') {
-          this.ctx.save(); this.ctx.scale(scale, scale);
-          const pulse = Math.sin(this.gameFrame * 0.1) * 4;
-
-          // Enhanced Torah scroll handles
-          this.ctx.shadowBlur = 15; this.ctx.shadowColor = '#b45309';
-          this.ctx.fillStyle = '#b45309'; this.ctx.strokeStyle = '#78350f'; this.ctx.lineWidth = 3;
-          this.ctx.beginPath(); this.ctx.roundRect(-28, -38, 14, 76, 5); this.ctx.fill(); this.ctx.stroke();
-          this.ctx.beginPath(); this.ctx.roundRect(14, -38, 14, 76, 5); this.ctx.fill(); this.ctx.stroke();
-
-          // Decorative rings on handles
-          this.ctx.fillStyle = '#fbbf24'; this.ctx.strokeStyle = '#d97706'; this.ctx.lineWidth = 1;
-          this.ctx.beginPath(); this.ctx.arc(-21, -38, 7, 0, Math.PI*2); this.ctx.fill(); this.ctx.stroke();
-          this.ctx.beginPath(); this.ctx.arc(-21, 38, 7, 0, Math.PI*2); this.ctx.fill(); this.ctx.stroke();
-          this.ctx.beginPath(); this.ctx.arc(21, -38, 7, 0, Math.PI*2); this.ctx.fill(); this.ctx.stroke();
-          this.ctx.beginPath(); this.ctx.arc(21, 38, 7, 0, Math.PI*2); this.ctx.fill(); this.ctx.stroke();
-
-          // Inner ring details
-          this.ctx.fillStyle = '#d97706';
-          this.ctx.beginPath(); this.ctx.arc(-21, -38, 4, 0, Math.PI*2); this.ctx.fill();
-          this.ctx.beginPath(); this.ctx.arc(-21, 38, 4, 0, Math.PI*2); this.ctx.fill();
-          this.ctx.beginPath(); this.ctx.arc(21, -38, 4, 0, Math.PI*2); this.ctx.fill();
-          this.ctx.beginPath(); this.ctx.arc(21, 38, 4, 0, Math.PI*2); this.ctx.fill();
-
-          this.ctx.shadowBlur = 0;
-
-          // Enhanced parchment scroll
-          const scrollG = this.ctx.createLinearGradient(-15, -25, 15, 25);
-          scrollG.addColorStop(0, '#fef3c7'); scrollG.addColorStop(0.5, '#fde68a'); scrollG.addColorStop(1, '#fef3c7');
-          this.ctx.fillStyle = scrollG; this.ctx.beginPath(); this.ctx.roundRect(-16, -26, 32, 52, 3); this.ctx.fill();
-
-          // Scroll border
-          this.ctx.strokeStyle = '#d97706'; this.ctx.lineWidth = 2; this.ctx.stroke();
-
-          // Torah text lines with Hebrew characters
-          this.ctx.fillStyle = '#92400e'; this.ctx.font = 'bold 6px Arial';
-          this.ctx.textAlign = 'center';
-          const torahText = ['תּוֹרָה', 'אוֹר', 'חַיִּים', 'מִצְוֹת', 'אֱמוּנָה'];
-          for(let i=0; i<5; i++) {
-            this.ctx.fillText(torahText[i], 0, -16 + i * 8);
-          }
-
-          // Enhanced divine light effect
-          const lightPulse = pulse * 1.5;
-          const lightG = this.ctx.createRadialGradient(0, 0, 15, 0, 0, 40 + lightPulse);
-          lightG.addColorStop(0, 'rgba(251, 191, 36, 0.3)'); lightG.addColorStop(0.5, 'rgba(251, 191, 36, 0.15)'); lightG.addColorStop(1, 'transparent');
-          this.ctx.fillStyle = lightG; this.ctx.beginPath(); this.ctx.arc(0, 0, 40 + lightPulse, 0, Math.PI*2); this.ctx.fill();
-
-          // Add floating particles around the Torah
-          this.ctx.fillStyle = '#fbbf24';
-          this.ctx.globalAlpha = 0.5;
-          for(let i=0; i<6; i++) {
-            const angle = (this.gameFrame * 0.05 + i/6 * Math.PI * 2) % (Math.PI * 2);
-            const x = Math.cos(angle) * (35 + Math.sin(this.gameFrame * 0.1 + i) * 5);
-            const y = Math.sin(angle) * (25 + Math.cos(this.gameFrame * 0.1 + i) * 3);
-            this.ctx.beginPath(); this.ctx.arc(x, y, 1.5, 0, Math.PI*2); this.ctx.fill();
-          }
-          this.ctx.globalAlpha = 1;
-
-          this.ctx.restore(); return;
-      }
-      let primary = '#3b82f6', secondary = '#1e3a8a', cockpit = '#38bdf8', engine = '#fb7185';
-      if (skin === 'skin_gold') { primary = '#fbbf24'; secondary = '#d97706'; cockpit = '#fffbeb'; engine = '#fde68a'; }
-      else if (skin === 'skin_stealth') { primary = '#1e293b'; secondary = '#020617'; cockpit = '#334155'; engine = '#ef4444'; }
-      else if (skin === 'skin_butzina') { primary = '#7e22ce'; secondary = '#581c87'; cockpit = '#e9d5ff'; engine = '#d8b4fe'; }
-      this.ctx.save(); this.ctx.scale(scale, scale);
-
-      // Enhanced engine glow effect
-      const glow = skin === 'skin_gold' ? 40 + Math.random() * 25 : skin === 'skin_butzina' ? 35 + Math.random() * 20 : 20 + Math.random() * 15;
-      this.ctx.shadowBlur = glow; this.ctx.shadowColor = engine;
-
-      // Enhanced engines with particle effect
-      this.ctx.fillStyle = engine;
-      this.ctx.beginPath(); this.ctx.ellipse(-14, 32, 7, 18, 0, 0, Math.PI*2); this.ctx.fill();
-      this.ctx.beginPath(); this.ctx.ellipse(14, 32, 7, 18, 0, 0, Math.PI*2); this.ctx.fill();
-
-      // Add engine particle trails
-      if (skin === 'skin_gold') {
-        this.ctx.shadowBlur = 20; this.ctx.shadowColor = '#fbbf24';
-        this.ctx.fillStyle = '#fbbf24';
-        this.ctx.globalAlpha = 0.7;
-        this.ctx.beginPath(); this.ctx.ellipse(-14, 45, 3, 8, 0, 0, Math.PI*2); this.ctx.fill();
-        this.ctx.beginPath(); this.ctx.ellipse(14, 45, 3, 8, 0, 0, Math.PI*2); this.ctx.fill();
-        this.ctx.globalAlpha = 1;
-      }
-
-      this.ctx.shadowBlur = 0; this.ctx.fillStyle = secondary;
-      this.ctx.beginPath(); this.ctx.moveTo(-10, -5); this.ctx.lineTo(-50, 25); this.ctx.lineTo(-50, 40); this.ctx.lineTo(-10, 25); this.ctx.closePath(); this.ctx.fill();
-      this.ctx.beginPath(); this.ctx.moveTo(10, -5); this.ctx.lineTo(50, 25); this.ctx.lineTo(50, 40); this.ctx.lineTo(10, 25); this.ctx.closePath(); this.ctx.fill();
-
-      // Enhanced main body with better gradient and metallic effect
-      const fG = this.ctx.createLinearGradient(-25, 0, 25, 0);
-      fG.addColorStop(0, secondary);
-      fG.addColorStop(0.3, primary);
-      fG.addColorStop(0.5, skin === 'skin_gold' ? '#f59e0b' : skin === 'skin_butzina' ? '#9333ea' : '#2563eb');
-      fG.addColorStop(0.7, primary);
-      fG.addColorStop(1, secondary);
-      this.ctx.fillStyle = fG; this.ctx.beginPath(); this.ctx.moveTo(0, -60); this.ctx.bezierCurveTo(28, -20, 28, 25, 20, 35); this.ctx.lineTo(-20, 35); this.ctx.bezierCurveTo(-28, 25, -28, -20, 0, -60); this.ctx.fill();
-
-      // Add metallic shine effect
-      const shineG = this.ctx.createLinearGradient(-15, -40, 15, -10);
-      shineG.addColorStop(0, 'rgba(255,255,255,0.3)'); shineG.addColorStop(0.5, 'rgba(255,255,255,0.1)'); shineG.addColorStop(1, 'rgba(255,255,255,0.3)');
-      this.ctx.fillStyle = shineG; this.ctx.beginPath(); this.ctx.ellipse(0, -25, 8, 25, 0, 0, Math.PI*2); this.ctx.fill();
-
-      // Enhanced cockpit with better glass effect
-      const cG = this.ctx.createLinearGradient(0, -35, 0, -5);
-      cG.addColorStop(0, '#fff'); cG.addColorStop(0.3, cockpit); cG.addColorStop(0.7, secondary); cG.addColorStop(1, 'rgba(0,0,0,0.3)');
-      this.ctx.fillStyle = cG; this.ctx.beginPath(); this.ctx.ellipse(0, -20, 9, 20, 0, 0, Math.PI*2); this.ctx.fill();
-
-      // Add cockpit reflection
-      this.ctx.fillStyle = 'rgba(255,255,255,0.4)'; this.ctx.beginPath(); this.ctx.ellipse(0, -22, 4, 8, 0, 0, Math.PI*2); this.ctx.fill();
-
-      // Special effects for different skins
-      if (skin === 'skin_gold') {
-        // Golden aura effect
-        this.ctx.shadowBlur = 30; this.ctx.shadowColor = '#fbbf24';
-        this.ctx.strokeStyle = 'rgba(251, 191, 36, 0.3)'; this.ctx.lineWidth = 2;
-        this.ctx.beginPath(); this.ctx.ellipse(0, 0, 45, 35, 0, 0, Math.PI*2); this.ctx.stroke();
-        this.ctx.shadowBlur = 0;
-
-        // Golden particles around the ship
-        this.ctx.fillStyle = '#fbbf24';
-        this.ctx.globalAlpha = 0.6;
-        for(let i=0; i<8; i++) {
-          const angle = (i/8) * Math.PI * 2;
-          const x = Math.cos(angle) * 40;
-          const y = Math.sin(angle) * 30 - 10;
-          this.ctx.beginPath(); this.ctx.arc(x, y, 1.5, 0, Math.PI*2); this.ctx.fill();
-        }
-        this.ctx.globalAlpha = 1;
+      // Define futuristic color schemes for each skin
+      let primary = '#00ffff', secondary = '#0088aa', accent = '#ff00ff', engine = '#00aaff', metallic = '#e0e0ff', glow = '#00ffff';
+      if (skin === 'skin_default') {
+          primary = '#3b82f6'; secondary = '#1e3a8a'; accent = '#60a5fa'; engine = '#0ea5e9'; metallic = '#cbd5e1'; glow = '#3b82f6';
+      } else if (skin === 'skin_gold') {
+          primary = '#fbbf24'; secondary = '#92400e'; accent = '#f59e0b'; engine = '#eab308'; metallic = '#fef3c7'; glow = '#fbbf24';
+      } else if (skin === 'skin_stealth') {
+          primary = '#334155'; secondary = '#1e293b'; accent = '#64748b'; engine = '#475569'; metallic = '#94a3b8'; glow = '#64748b';
       } else if (skin === 'skin_butzina') {
-        // Purple aura effect
-        this.ctx.shadowBlur = 25; this.ctx.shadowColor = '#7e22ce';
-        this.ctx.strokeStyle = 'rgba(126, 34, 206, 0.4)'; this.ctx.lineWidth = 2;
-        this.ctx.beginPath(); this.ctx.ellipse(0, 0, 42, 32, 0, 0, Math.PI*2); this.ctx.stroke();
-        this.ctx.shadowBlur = 0;
+          primary = '#a855f7'; secondary = '#6b21a8'; accent = '#c084fc'; engine = '#8b5cf6'; metallic = '#d8b4fe'; glow = '#a855f7';
+      }
 
-        // Purple energy tendrils
-        this.ctx.strokeStyle = '#a855f7'; this.ctx.lineWidth = 1;
-        this.ctx.globalAlpha = 0.7;
-        for(let i=0; i<6; i++) {
-          const angle = (i/6) * Math.PI * 2;
-          this.ctx.beginPath(); this.ctx.moveTo(0, -20);
-          this.ctx.quadraticCurveTo(
-            Math.cos(angle) * 25, Math.sin(angle) * 20 - 10,
-            Math.cos(angle) * 35, Math.sin(angle) * 25 - 5
-          );
-          this.ctx.stroke();
-        }
-        this.ctx.globalAlpha = 1;
+      this.ctx.save();
+      this.ctx.scale(scale, scale);
+
+      // Cache gradients to avoid recreating them every frame
+      if (!this.shipGradients || this.shipGradients.skin !== skin) {
+          this.shipGradients = {
+              skin: skin,
+              hull: this.ctx.createLinearGradient(-35, -60, 35, 40),
+              reflection: this.ctx.createLinearGradient(-20, -50, 20, -20),
+              canopy: this.ctx.createLinearGradient(0, -45, 0, -25),
+              core: this.ctx.createRadialGradient(0, 37, 0, 0, 37, 6),
+              aura: this.ctx.createRadialGradient(0, -20, 40, 0, -20, 80),
+              pulse: this.ctx.createRadialGradient(0, -20, 30, 0, -20, 60)
+          };
+
+          // Setup gradients once
+          const g = this.shipGradients;
+          g.hull.addColorStop(0, metallic);
+          g.hull.addColorStop(0.2, secondary);
+          g.hull.addColorStop(0.5, primary);
+          g.hull.addColorStop(0.8, secondary);
+          g.hull.addColorStop(1, metallic);
+
+          g.reflection.addColorStop(0, 'rgba(255,255,255,0.6)');
+          g.reflection.addColorStop(0.3, 'rgba(255,255,255,0.2)');
+          g.reflection.addColorStop(0.7, 'rgba(255,255,255,0.1)');
+          g.reflection.addColorStop(1, 'rgba(255,255,255,0.4)');
+
+          g.canopy.addColorStop(0, 'rgba(255,255,255,0.95)');
+          g.canopy.addColorStop(0.2, 'rgba(200,255,255,0.8)');
+          g.canopy.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, 0.6)`);
+          g.canopy.addColorStop(0.8, 'rgba(100,200,255,0.4)');
+          g.canopy.addColorStop(1, 'rgba(0,0,0,0.7)');
+
+          g.core.addColorStop(0, engine);
+          g.core.addColorStop(0.7, `rgba(${this.hexToRgb(engine).join(',')}, 0.6)`);
+          g.core.addColorStop(1, 'transparent');
+
+          g.aura.addColorStop(0, `rgba(${this.hexToRgb(primary).join(',')}, 0.08)`);
+          g.aura.addColorStop(0.3, `rgba(${this.hexToRgb(accent).join(',')}, 0.05)`);
+          g.aura.addColorStop(0.6, `rgba(${this.hexToRgb(glow).join(',')}, 0.03)`);
+          g.aura.addColorStop(1, 'transparent');
+
+          g.pulse.addColorStop(0, `rgba(${this.hexToRgb(glow).join(',')}, ${0.03 * pulse})`);
+          g.pulse.addColorStop(0.5, `rgba(${this.hexToRgb(primary).join(',')}, ${0.02 * pulse})`);
+          g.pulse.addColorStop(1, 'transparent');
+      }
+
+      // === OPTIMIZED SPACECRAFT DESIGN ===
+      // Main hull - simplified paths
+      this.ctx.fillStyle = this.shipGradients.hull;
+
+      // Upper hull - single optimized path
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, -70);
+      this.ctx.lineTo(12, -55);
+      this.ctx.lineTo(25, -35);
+      this.ctx.lineTo(20, -10);
+      this.ctx.lineTo(15, 15);
+      this.ctx.lineTo(8, 25);
+      this.ctx.lineTo(-8, 25);
+      this.ctx.lineTo(-15, 15);
+      this.ctx.lineTo(-20, -10);
+      this.ctx.lineTo(-25, -35);
+      this.ctx.lineTo(-12, -55);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Lower hull - simplified
+      this.ctx.fillStyle = secondary;
+      this.ctx.beginPath();
+      this.ctx.moveTo(8, 25);
+      this.ctx.lineTo(15, 35);
+      this.ctx.lineTo(10, 45);
+      this.ctx.lineTo(-10, 45);
+      this.ctx.lineTo(-15, 35);
+      this.ctx.lineTo(-8, 25);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Simplified metallic highlights
+      this.ctx.fillStyle = this.shipGradients.reflection;
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, -35, 12, 30, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // === FORWARD-SWEPT WINGS ===
+      this.ctx.fillStyle = this.shipGradients.hull;
+
+      // Left wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(25, -35);
+      this.ctx.lineTo(55, -45);
+      this.ctx.lineTo(45, -25);
+      this.ctx.lineTo(35, -15);
+      this.ctx.lineTo(20, -10);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Right wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(-25, -35);
+      this.ctx.lineTo(-55, -45);
+      this.ctx.lineTo(-45, -25);
+      this.ctx.lineTo(-35, -15);
+      this.ctx.lineTo(-20, -10);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Wing reinforcements - single stroke call
+      this.ctx.strokeStyle = metallic;
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(25, -35);
+      this.ctx.lineTo(35, -40);
+      this.ctx.moveTo(-25, -35);
+      this.ctx.lineTo(-35, -40);
+      this.ctx.stroke();
+
+      // === OPTIMIZED NEON TRIM ===
+      // Reduced shadow operations, single pass for all trim
+      this.ctx.shadowBlur = 8 * pulse;
+      this.ctx.shadowColor = glow;
+      this.ctx.strokeStyle = glow;
+      this.ctx.lineWidth = 2.5;
+      this.ctx.lineCap = 'round';
+
+      this.ctx.beginPath();
+      // Hull edge
+      this.ctx.moveTo(12, -55);
+      this.ctx.lineTo(0, -70);
+      this.ctx.lineTo(-12, -55);
+      // Wing edges
+      this.ctx.moveTo(25, -35);
+      this.ctx.lineTo(55, -45);
+      this.ctx.moveTo(-25, -35);
+      this.ctx.lineTo(-55, -45);
+      // Engine housing
+      this.ctx.moveTo(10, 45);
+      this.ctx.lineTo(15, 35);
+      this.ctx.lineTo(-15, 35);
+      this.ctx.lineTo(-10, 45);
+      this.ctx.stroke();
+
+      this.ctx.shadowBlur = 0;
+
+      // === ADVANCED COCKPIT ===
+      this.ctx.fillStyle = this.shipGradients.canopy;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-10, -45);
+      this.ctx.lineTo(0, -60);
+      this.ctx.lineTo(10, -45);
+      this.ctx.lineTo(12, -30);
+      this.ctx.lineTo(-12, -30);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Canopy frame
+      this.ctx.strokeStyle = metallic;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.stroke();
+
+      // Energy conduits - simplified
+      this.ctx.shadowBlur = 6 * pulse;
+      this.ctx.shadowColor = accent;
+      this.ctx.strokeStyle = accent;
+      this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-8, -40);
+      this.ctx.lineTo(8, -40);
+      this.ctx.moveTo(-6, -35);
+      this.ctx.lineTo(6, -35);
+      this.ctx.stroke();
+      this.ctx.shadowBlur = 0;
+
+      // === ION ENGINES ===
+      this.ctx.fillStyle = secondary;
+
+      // Engine housings - simplified paths
+      this.ctx.beginPath();
+      this.ctx.moveTo(8, 25);
+      this.ctx.lineTo(18, 30);
+      this.ctx.lineTo(22, 40);
+      this.ctx.lineTo(15, 50);
+      this.ctx.lineTo(8, 45);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(-8, 25);
+      this.ctx.lineTo(-18, 30);
+      this.ctx.lineTo(-22, 40);
+      this.ctx.lineTo(-15, 50);
+      this.ctx.lineTo(-8, 45);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Plasma cores - optimized with single gradient
+      this.ctx.shadowBlur = 15 * pulse;
+      this.ctx.shadowColor = engine;
+      this.ctx.fillStyle = this.shipGradients.core;
+
+      this.ctx.beginPath();
+      this.ctx.ellipse(17, 37, 6, 4, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      this.ctx.beginPath();
+      this.ctx.ellipse(-17, 37, 6, 4, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      this.ctx.shadowBlur = 0;
+
+      // Engine vents - simplified
+      this.ctx.strokeStyle = metallic;
+      this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      this.ctx.moveTo(12, 50);
+      this.ctx.lineTo(18, 55);
+      this.ctx.moveTo(-12, 50);
+      this.ctx.lineTo(-18, 55);
+      this.ctx.stroke();
+
+      // === ENERGY FIELD AURA ===
+      // Reduced complexity, single aura pass
+      this.ctx.fillStyle = this.shipGradients.aura;
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, -20, 75, 50, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // === REDUCED FLOATING PARTICLES ===
+      // Fewer particles for performance
+      this.ctx.fillStyle = glow;
+      this.ctx.globalAlpha = 0.6;
+      for(let i=0; i<4; i++) { // Reduced from 6 to 4
+          const angle = (time * 0.6 + i/4 * Math.PI * 2) % (Math.PI * 2);
+          const distance = 50 + Math.sin(time * 1.2 + i) * 6; // Smaller variation
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance - 15;
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, 1.0, 0, Math.PI*2); // Smaller size
+          this.ctx.fill();
+      }
+      this.ctx.globalAlpha = 1;
+
+      // === FINAL ENERGY PULSE ===
+      // Only on certain frames for performance
+      if (this.gameFrame % 3 === 0) { // Every 3rd frame
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.fillStyle = this.shipGradients.pulse;
+          this.ctx.beginPath();
+          this.ctx.ellipse(0, -20, 60, 45, 0, 0, Math.PI*2);
+          this.ctx.fill();
+          this.ctx.globalCompositeOperation = 'source-over';
       }
 
       this.ctx.restore();
+  }
+
+  hexToRgb(hex: string): number[] {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? [
+          parseInt(result[1], 16),
+          parseInt(result[2], 16),
+          parseInt(result[3], 16)
+      ] : [255, 255, 255];
   }
 
   drawEnemy(e: any) {
@@ -816,7 +1042,7 @@ export class GameEngine {
       this.ctx.restore();
   }
 
-  updateBoss(dt: number) { 
+  updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
       b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
       if(b.y < b.targetY) b.y += 0.9 * dt;
@@ -824,19 +1050,31 @@ export class GameEngine {
       b.timer = (b.timer || 0) + dt;
       if(b.timer >= b.attackRate) {
           b.timer = 0;
-          const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
-          const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
-          if (typeIdx === 1) { 
+
+          // ישיר מיפוי של רמות לבוסים - יריות
+          if (this.level === 1) { // Tannina
               this.bossProjectiles.push({x: b.x - 120, y: b.y + 100, vy: 4.0, vx: 0});
               this.bossProjectiles.push({x: b.x + 120, y: b.y + 100, vy: 4.0, vx: 0});
-          } else if (typeIdx === 2) { 
+          } else if (this.level === 8) { // Koy
               for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
-          } else if (typeIdx === 3) {
+          } else if (this.level === 15) { // Shed
               for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
-          } else if (typeIdx === 4) {
+          } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
+              // יריות מכוונות לשחקן (5 יריות)
+              const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
+              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
+
+              // יריות מעגליות (8 יריות)
+              for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5}); }
+
+              // יריות מתפזרות לצדדים (4 יריות)
+              for(let i=-1; i<=2; i++) this.bossProjectiles.push({x: b.x + i*80, y: b.y + 100, vy: 4.5, vx: i * 0.3});
+          } else if (this.level === 29) { // Agirat
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
               for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
-          } else {
+          } else if (this.level === 36) { // Leviathan
+              for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
+          } else { // Ziz
               for(let i=0; i<8; i++) { const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
           }
           Sound.play('shoot');
@@ -860,13 +1098,14 @@ export class GameEngine {
       const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
       const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
       
-      if (typeIdx === 1) this.drawTannina(); 
-      else if (typeIdx === 2) this.drawKoy(); 
+      if (typeIdx === 1) this.drawTannina();
+      else if (typeIdx === 2) this.drawKoy();
       else if (typeIdx === 3) this.drawShed();
-      else if (typeIdx === 4) this.drawAgirat();
-      else if (typeIdx === 5) this.drawLeviathan();
+      else if (typeIdx === 4) this.drawAshmedai();
+      else if (typeIdx === 5) this.drawAgirat();
+      else if (typeIdx === 6) this.drawLeviathan();
       else this.drawZiz();
-      const names = ["", "תנינא", "כוי", "שד", "אגירת", "לויתן", "זיז שדי"]; 
+      const names = ["", "תנינא", "כוי", "שד", "אשמדאי", "אגירת", "לויתן", "זיז שדי"];
       const bName = names[typeIdx] || "מזיק";
       this.ctx.fillStyle = 'white'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
       this.ctx.font = 'bold 46px Frank Ruhl Libre'; this.ctx.textAlign = 'center'; this.ctx.fillText(bName, 0, 30);
@@ -912,6 +1151,294 @@ export class GameEngine {
   drawZiz() {
       this.ctx.fillStyle = '#fbbf24'; this.ctx.beginPath(); this.ctx.moveTo(-180, 0); this.ctx.quadraticCurveTo(0, -150, 180, 0); this.ctx.lineTo(0, 50); this.ctx.closePath(); this.ctx.fill();
       this.ctx.fillStyle = '#d97706'; this.ctx.beginPath(); this.ctx.arc(0, -20, 25, 0, Math.PI*2); this.ctx.fill();
+  }
+
+  drawAshmedai() {
+      const pulse = Math.sin(this.gameFrame * 0.12) * 10;
+
+      // Regal demonic king figure
+      this.ctx.fillStyle = '#1a0a1e';
+      this.ctx.strokeStyle = '#7c2d12';
+      this.ctx.lineWidth = 6;
+
+      // Majestic royal body
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, 30, 100, 70, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Royal purple and gold robe
+      this.ctx.fillStyle = '#581c87';
+      this.ctx.strokeStyle = '#a855f7';
+      this.ctx.lineWidth = 4;
+
+      // Upper robe
+      this.ctx.beginPath();
+      this.ctx.moveTo(-80, 20);
+      this.ctx.lineTo(80, 20);
+      this.ctx.lineTo(70, 80);
+      this.ctx.lineTo(-70, 80);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Gold trim on robe
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-75, 25);
+      this.ctx.lineTo(75, 25);
+      this.ctx.stroke();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(-65, 40);
+      this.ctx.lineTo(65, 40);
+      this.ctx.stroke();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(-55, 55);
+      this.ctx.lineTo(55, 55);
+      this.ctx.stroke();
+
+      // Kingly head with demonic features
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.strokeStyle = '#4c1d95';
+      this.ctx.lineWidth = 4;
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, -40, 50, 45, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Majestic crown with spikes
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+
+      // Crown base
+      this.ctx.beginPath();
+      this.ctx.moveTo(-45, -75);
+      this.ctx.lineTo(45, -75);
+      this.ctx.lineTo(40, -85);
+      this.ctx.lineTo(-40, -85);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Crown spikes
+      this.ctx.fillStyle = '#ef4444';
+      for (let i = 0; i < 7; i++) {
+          const spikeX = -35 + i * 10;
+          this.ctx.beginPath();
+          this.ctx.moveTo(spikeX, -85);
+          this.ctx.lineTo(spikeX + 2, -95);
+          this.ctx.lineTo(spikeX + 4, -85);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Crown jewels
+      this.ctx.fillStyle = '#dc2626';
+      this.ctx.beginPath();
+      this.ctx.arc(-20, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.arc(0, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.arc(20, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Piercing yellow eyes
+      this.ctx.shadowBlur = 20;
+      this.ctx.shadowColor = '#fbbf24';
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.beginPath();
+      this.ctx.ellipse(-15, -45, 10, 8, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.ellipse(15, -45, 10, 8, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Black slit pupils
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#000000';
+      this.ctx.beginPath();
+      this.ctx.ellipse(-15, -45, 3, 6, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.ellipse(15, -45, 3, 6, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Sharp demonic horns
+      this.ctx.fillStyle = '#4c1d95';
+      this.ctx.strokeStyle = '#7c3aed';
+      this.ctx.lineWidth = 3;
+
+      // Left horn
+      this.ctx.beginPath();
+      this.ctx.moveTo(-35, -60);
+      this.ctx.quadraticCurveTo(-55, -75, -50, -90);
+      this.ctx.quadraticCurveTo(-45, -80, -35, -65);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Right horn
+      this.ctx.beginPath();
+      this.ctx.moveTo(35, -60);
+      this.ctx.quadraticCurveTo(55, -75, 50, -90);
+      this.ctx.quadraticCurveTo(45, -80, 35, -65);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Regal beard
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.strokeStyle = '#4c1d95';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-20, -20);
+      this.ctx.quadraticCurveTo(0, 0, 20, -20);
+      this.ctx.quadraticCurveTo(0, 20, -20, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Sharp fangs
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.beginPath();
+      this.ctx.moveTo(-8, -25);
+      this.ctx.lineTo(-12, -15);
+      this.ctx.lineTo(-4, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(8, -25);
+      this.ctx.lineTo(12, -15);
+      this.ctx.lineTo(4, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Royal scepter in right hand
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+
+      // Scepter shaft
+      this.ctx.beginPath();
+      this.ctx.moveTo(70, 10);
+      this.ctx.lineTo(70, -20);
+      this.ctx.stroke();
+
+      // Scepter orb
+      this.ctx.beginPath();
+      this.ctx.arc(70, -25, 8, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Scepter spikes
+      this.ctx.fillStyle = '#ef4444';
+      for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2;
+          const spikeX = 70 + Math.cos(angle) * 8;
+          const spikeY = -25 + Math.sin(angle) * 8;
+          this.ctx.beginPath();
+          this.ctx.moveTo(spikeX, spikeY);
+          this.ctx.lineTo(spikeX + Math.cos(angle) * 5, spikeY + Math.sin(angle) * 5);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Left hand holding royal seal
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.beginPath();
+      this.ctx.arc(-70, 15, 12, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Royal seal
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.arc(-70, 15, 6, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Seal symbol (crown)
+      this.ctx.fillStyle = '#dc2626';
+      this.ctx.beginPath();
+      this.ctx.moveTo(-73, 12);
+      this.ctx.lineTo(-67, 12);
+      this.ctx.lineTo(-70, 8);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Demonic wings
+      this.ctx.fillStyle = '#581c87';
+      this.ctx.strokeStyle = '#7c3aed';
+      this.ctx.lineWidth = 2;
+
+      // Left wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(-90, -10);
+      this.ctx.quadraticCurveTo(-140, -30, -120, 40);
+      this.ctx.quadraticCurveTo(-100, 60, -80, 20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Right wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(90, -10);
+      this.ctx.quadraticCurveTo(140, -30, 120, 40);
+      this.ctx.quadraticCurveTo(100, 60, 80, 20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Wing membranes with demonic patterns
+      this.ctx.fillStyle = '#7c3aed';
+      for (let i = 0; i < 12; i++) {
+          const side = i % 2 === 0 ? -1 : 1;
+          const x = side * (95 + Math.sin(i * 0.8) * 15);
+          const y = -5 + i * 3;
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, y);
+          this.ctx.lineTo(x + side * 20, y + 15);
+          this.ctx.lineTo(x + side * 12, y + 20);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Royal demonic aura
+      const auraG = this.ctx.createRadialGradient(0, 0, 60, 0, 0, 160 + pulse);
+      auraG.addColorStop(0, 'rgba(88, 28, 135, 0.5)');
+      auraG.addColorStop(0.4, 'rgba(168, 85, 247, 0.3)');
+      auraG.addColorStop(0.7, 'rgba(251, 191, 36, 0.2)');
+      auraG.addColorStop(1, 'transparent');
+      this.ctx.fillStyle = auraG;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, 160 + pulse, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Floating royal particles - optimized
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.globalAlpha = 0.7;
+      for (let i = 0; i < 6; i++) {
+          const angle = (this.gameFrame * 0.04 + i / 6 * Math.PI * 2) % (Math.PI * 2);
+          const distance = 130 + Math.sin(this.gameFrame * 0.06 + i) * 12;
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance;
+          this.ctx.shadowBlur = 8;
+          this.ctx.shadowColor = '#fbbf24';
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, 1.5, 0, Math.PI*2);
+          this.ctx.fill();
+      }
+      this.ctx.shadowBlur = 0;
+      this.ctx.globalAlpha = 1;
   }
 
   drawBonus(b: any) { 
@@ -1013,7 +1540,7 @@ export class GameEngine {
       } 
   }
 
-  startBossFight() { 
+  startBossFight() {
       this.bossDamageTaken = false;
       this.boss = { x: this.width / 2, y: -450, targetY: 220, maxHp: 250 + (this.level * 15), hp: 250 + (this.level * 15), currentText: "", frame: 0, attackRate: Math.max(45, 180 - (this.level * 2)) };
       this.onStatsUpdate({ bossActive: true, bossHpPercent: 100, currentWord: "" });

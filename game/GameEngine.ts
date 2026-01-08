@@ -54,7 +54,7 @@ export class GameEngine {
   enemyPool: PoolableEnemy[] = Array.from({length: 30}, () => new PoolableEnemy());
   projectilePool: PoolableProjectile[] = Array.from({length: 120}, () => new PoolableProjectile());
   particlePool: Particle[] = Array.from({length: 500}, () => new Particle());
-  engineParticles: {x: number, y: number, vx: number, vy: number, life: number, maxLife: number, size: number}[] = Array.from({length: 15}, () => ({x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 15, size: 0}));
+  jetParticles: {x: number, y: number, vx: number, vy: number, alpha: number, size: number, life: number}[] = [];
   
   bossProjectiles: any[] = [];
   bonuses: any[] = [];
@@ -266,7 +266,7 @@ export class GameEngine {
         this.updateEnemies(dt);
         this.updateHazards(dt);
         this.updateBonuses(dt);
-        this.updateEngineParticles(dt);
+        this.updateJetParticles(dt);
     }
     
     this.particlePool.forEach(p => { if(p.active) p.update(dt); });
@@ -553,7 +553,7 @@ export class GameEngine {
 
   drawPlayer() {
       // Draw engine particles first (behind the ship)
-      this.drawEngineParticles();
+      this.drawJetParticles();
 
       this.ctx.save(); this.ctx.translate(this.player.x, this.player.y);
 
@@ -1255,7 +1255,7 @@ export class GameEngine {
       this.ctx.restore();
   }
 
-  updateBoss(dt: number) { 
+  updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
       b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
       if(b.y < b.targetY) b.y += 0.9 * dt;
@@ -1263,19 +1263,31 @@ export class GameEngine {
       b.timer = (b.timer || 0) + dt;
       if(b.timer >= b.attackRate) {
           b.timer = 0;
-          const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
-          const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
-          if (typeIdx === 1) { 
+
+          // ישיר מיפוי של רמות לבוסים - יריות
+          if (this.level === 1) { // Tannina
               this.bossProjectiles.push({x: b.x - 120, y: b.y + 100, vy: 4.0, vx: 0});
               this.bossProjectiles.push({x: b.x + 120, y: b.y + 100, vy: 4.0, vx: 0});
-          } else if (typeIdx === 2) { 
+          } else if (this.level === 8) { // Koy
               for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
-          } else if (typeIdx === 3) {
+          } else if (this.level === 15) { // Shed
               for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
-          } else if (typeIdx === 4) {
+          } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
+              // יריות מכוונות לשחקן (5 יריות)
+              const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
+              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
+
+              // יריות מעגליות (8 יריות)
+              for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5}); }
+
+              // יריות מתפזרות לצדדים (4 יריות)
+              for(let i=-1; i<=2; i++) this.bossProjectiles.push({x: b.x + i*80, y: b.y + 100, vy: 4.5, vx: i * 0.3});
+          } else if (this.level === 29) { // Agirat
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
               for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
-          } else {
+          } else if (this.level === 36) { // Leviathan
+              for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
+          } else { // Ziz
               for(let i=0; i<8; i++) { const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
           }
           Sound.play('shoot');
@@ -1290,41 +1302,37 @@ export class GameEngine {
       }
   }
 
-  drawBoss() { 
+  drawBoss() {
       const b = this.boss; if (!b) return;
       const isMobile = this.width < 600;
       this.ctx.save(); this.ctx.translate(b.x, b.y);
       if (isMobile) this.ctx.scale(0.75, 0.75);
-      
-      const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
-      const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
 
-      // Boss order: Tannina(1), Koy(2), Shed(3), Ashmedai(4), Agirat(5), Leviathan(6), Ziz(7+)
+      // ישיר מיפוי של רמות לבוסים
       let bName = "";
-
-      // Special case for level 29 (Pumbedita) - Ashmedai boss instead of whatever typeIdx would be
-      if (this.level === 29) {
-        this.drawAshmedai();
-        bName = "אשמדאי";
-      } else if (typeIdx === 1) {
+      if (this.level === 1) {
         this.drawTannina();
         bName = "תנינא";
-      } else if (typeIdx === 2) {
+      } else if (this.level === 8) {
         this.drawKoy();
         bName = "כוי";
-      } else if (typeIdx === 3) {
+      } else if (this.level === 15) {
         this.drawShed();
         bName = "שד";
-      } else if (typeIdx === 4) {
+      } else if (this.level === 22) {
+        this.drawAshmedai();
+        bName = "אשמדאי";
+      } else if (this.level === 29) {
         this.drawAgirat();
         bName = "אגירת";
-      } else if (typeIdx === 5) {
+      } else if (this.level === 36) {
         this.drawLeviathan();
         bName = "לויתן";
       } else {
         this.drawZiz();
         bName = "זיז שדי";
       }
+
       this.ctx.fillStyle = 'white'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
       this.ctx.font = 'bold 46px Frank Ruhl Libre'; this.ctx.textAlign = 'center'; this.ctx.fillText(bName, 0, 30);
       this.ctx.restore();
@@ -2831,51 +2839,147 @@ export class GameEngine {
       this.ctx.globalAlpha = 1;
   }
 
-  updateEngineParticles(dt: number) {
-      // Update engine particles
-      for (let i = this.engineParticles.length - 1; i >= 0; i--) {
-          const p = this.engineParticles[i];
+  updateJetParticles(dt: number) {
+      // Create smooth continuous contrail - short and tapered trail
+      const trailLength = 12; // Short trail
+      const segmentSpacing = 10; // Larger spacing for shorter trail
 
-          if (p.life > 0) {
-              p.life -= dt;
-              p.x += p.vx * dt;
-              p.y += p.vy * dt;
-              p.size = (p.life / p.maxLife) * 8; // Size decreases over time
-          } else {
-              // Respawn particle at engine
-              p.x = this.player.x;
-              p.y = this.player.y + 15; // Behind the ship
-              p.vx = (Math.random() - 0.5) * 20 - this.player.velocityX * 0.5; // Spread out and affected by ship movement
-              p.vy = 10 + Math.random() * 15; // Downward motion
-              p.life = p.maxLife;
-              p.size = 8;
+      // Engine color based on skin
+      const engineColor = this.config.skin === 'skin_gold' ? '#fbbf24' :
+                         this.config.skin === 'skin_butzina' ? '#d8b4fe' :
+                         this.config.skin === 'skin_stealth' ? '#ef4444' :
+                         this.config.skin === 'skin_default' ? '#fb7185' : '#00ff88';
+
+      // Add new trail segments less frequently for smooth constant trail
+      if (this.jetParticles.length === 0 || this.jetParticles[this.jetParticles.length - 1].y - this.player.y > segmentSpacing) {
+          // Left engine trail - constant smooth trail
+          this.jetParticles.push({
+              x: this.player.x - 18,
+              y: this.player.y + 38,
+              vx: 0,
+              vy: 0,
+              alpha: 0.9, // High opacity for visibility
+              size: 3.5,
+              life: trailLength
+          });
+
+          // Right engine trail - constant smooth trail
+          this.jetParticles.push({
+              x: this.player.x + 18,
+              y: this.player.y + 38,
+              vx: 0,
+              vy: 0,
+              alpha: 0.9, // High opacity for visibility
+              size: 3.5,
+              life: trailLength
+          });
+      }
+
+      // Update trail segments - smooth constant movement
+      for (let i = this.jetParticles.length - 1; i >= 0; i--) {
+          const p = this.jetParticles[i];
+          p.life -= dt * 0.5; // Faster fade for shorter trail
+          p.alpha = Math.max(0, p.alpha - 0.005 * dt); // Consistent fade
+
+          // Constant downward movement for smooth trail
+          p.y += 2.5 * dt; // Slower, more consistent movement
+
+          // Minimal horizontal drift for stability
+          p.x += (this.player.x - p.x) * 0.02 * dt;
+
+          if (p.life <= 0 || p.alpha <= 0) {
+              this.jetParticles.splice(i, 1);
           }
+      }
+
+      // Maintain trail length - prevent buildup
+      if (this.jetParticles.length > trailLength * 2) { // *2 for both engines
+          this.jetParticles.splice(0, this.jetParticles.length - trailLength * 2);
       }
   }
 
-  drawEngineParticles() {
+  drawJetParticles() {
+      if (this.jetParticles.length < 2) return;
+
       this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
 
-      for (const p of this.engineParticles) {
-          if (p.life > 0) {
-              const alpha = p.life / p.maxLife;
-              this.ctx.globalAlpha = alpha * 0.7;
+      // Engine color based on skin
+      const engineColor = this.config.skin === 'skin_gold' ? '#fbbf24' :
+                         this.config.skin === 'skin_butzina' ? '#d8b4fe' :
+                         this.config.skin === 'skin_stealth' ? '#ef4444' :
+                         this.config.skin === 'skin_default' ? '#fb7185' : '#00ff88';
 
-              // Simple fire effect - just colored circles
-              this.ctx.fillStyle = `rgba(255, 120, 0, ${alpha})`;
+      // Draw smooth contrail streams - thick at start, thin at end
+      const leftTrail = this.jetParticles.filter((_, i) => i % 2 === 0).reverse();
+      const rightTrail = this.jetParticles.filter((_, i) => i % 2 === 1).reverse();
+
+      // Draw left engine contrail with tapered thickness
+      if (leftTrail.length > 1) {
+          for (let i = 0; i < leftTrail.length - 1; i++) {
+              const p1 = leftTrail[i];
+              const p2 = leftTrail[i + 1];
+
+              // Calculate thickness based on position (thicker at start)
+              const thicknessRatio = 1 - (i / leftTrail.length);
+              const thickness = 8 * thicknessRatio + 1; // 8px at start, 1px at end
+
+              this.ctx.strokeStyle = engineColor;
+              this.ctx.lineWidth = thickness;
+              this.ctx.lineCap = 'round';
+              this.ctx.globalAlpha = p1.alpha * 0.8;
+
               this.ctx.beginPath();
-              this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-              this.ctx.fill();
+              this.ctx.moveTo(p1.x, p1.y);
+              this.ctx.lineTo(p2.x, p2.y);
+              this.ctx.stroke();
 
-              // Simple glow
-              this.ctx.shadowBlur = p.size;
-              this.ctx.shadowColor = `rgba(255, 150, 0, ${alpha * 0.3})`;
-              this.ctx.beginPath();
-              this.ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2);
-              this.ctx.fill();
+              // Add glow effect
+              this.ctx.shadowBlur = 15 * thicknessRatio;
+              this.ctx.shadowColor = engineColor;
+              this.ctx.stroke();
               this.ctx.shadowBlur = 0;
           }
       }
+
+      // Draw right engine contrail with tapered thickness
+      if (rightTrail.length > 1) {
+          for (let i = 0; i < rightTrail.length - 1; i++) {
+              const p1 = rightTrail[i];
+              const p2 = rightTrail[i + 1];
+
+              // Calculate thickness based on position (thicker at start)
+              const thicknessRatio = 1 - (i / rightTrail.length);
+              const thickness = 8 * thicknessRatio + 1; // 8px at start, 1px at end
+
+              this.ctx.strokeStyle = engineColor;
+              this.ctx.lineWidth = thickness;
+              this.ctx.lineCap = 'round';
+              this.ctx.globalAlpha = p1.alpha * 0.8;
+
+              this.ctx.beginPath();
+              this.ctx.moveTo(p1.x, p1.y);
+              this.ctx.lineTo(p2.x, p2.y);
+              this.ctx.stroke();
+
+              // Add glow effect
+              this.ctx.shadowBlur = 15 * thicknessRatio;
+              this.ctx.shadowColor = engineColor;
+              this.ctx.stroke();
+              this.ctx.shadowBlur = 0;
+          }
+      }
+
+      // Add bright glow effect at engine exits
+      this.ctx.shadowBlur = 25;
+      this.ctx.shadowColor = engineColor;
+      this.jetParticles.slice(-2).forEach(p => { // Glow the newest segments
+          this.ctx.globalAlpha = p.alpha;
+          this.ctx.fillStyle = engineColor;
+          this.ctx.beginPath();
+          this.ctx.arc(p.x, p.y, p.size * 2, 0, Math.PI*2);
+          this.ctx.fill();
+      });
 
       this.ctx.restore();
   }
@@ -2988,7 +3092,7 @@ export class GameEngine {
       } 
   }
 
-  startBossFight() { 
+  startBossFight() {
       this.bossDamageTaken = false;
       this.boss = { x: this.width / 2, y: -450, targetY: 220, maxHp: 250 + (this.level * 15), hp: 250 + (this.level * 15), currentText: "", frame: 0, attackRate: Math.max(45, 180 - (this.level * 2)) };
       this.onStatsUpdate({ bossActive: true, bossHpPercent: 100, currentWord: "" });

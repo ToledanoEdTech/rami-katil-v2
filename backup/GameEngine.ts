@@ -816,7 +816,7 @@ export class GameEngine {
       this.ctx.restore();
   }
 
-  updateBoss(dt: number) { 
+  updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
       b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
       if(b.y < b.targetY) b.y += 0.9 * dt;
@@ -824,19 +824,31 @@ export class GameEngine {
       b.timer = (b.timer || 0) + dt;
       if(b.timer >= b.attackRate) {
           b.timer = 0;
-          const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
-          const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
-          if (typeIdx === 1) { 
+
+          // ישיר מיפוי של רמות לבוסים - יריות
+          if (this.level === 1) { // Tannina
               this.bossProjectiles.push({x: b.x - 120, y: b.y + 100, vy: 4.0, vx: 0});
               this.bossProjectiles.push({x: b.x + 120, y: b.y + 100, vy: 4.0, vx: 0});
-          } else if (typeIdx === 2) { 
+          } else if (this.level === 8) { // Koy
               for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
-          } else if (typeIdx === 3) {
+          } else if (this.level === 15) { // Shed
               for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
-          } else if (typeIdx === 4) {
+          } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
+              // יריות מכוונות לשחקן (5 יריות)
+              const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
+              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
+
+              // יריות מעגליות (8 יריות)
+              for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5}); }
+
+              // יריות מתפזרות לצדדים (4 יריות)
+              for(let i=-1; i<=2; i++) this.bossProjectiles.push({x: b.x + i*80, y: b.y + 100, vy: 4.5, vx: i * 0.3});
+          } else if (this.level === 29) { // Agirat
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
               for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
-          } else {
+          } else if (this.level === 36) { // Leviathan
+              for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
+          } else { // Ziz
               for(let i=0; i<8; i++) { const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
           }
           Sound.play('shoot');
@@ -851,23 +863,37 @@ export class GameEngine {
       }
   }
 
-  drawBoss() { 
+  drawBoss() {
       const b = this.boss; if (!b) return;
       const isMobile = this.width < 600;
       this.ctx.save(); this.ctx.translate(b.x, b.y);
       if (isMobile) this.ctx.scale(0.75, 0.75);
-      
-      const sugiaIdx = SUGIOT.findIndex(s => s.requiredLevel === this.level);
-      const typeIdx = (Math.max(0, sugiaIdx) % 6) + 1;
-      
-      if (typeIdx === 1) this.drawTannina(); 
-      else if (typeIdx === 2) this.drawKoy(); 
-      else if (typeIdx === 3) this.drawShed();
-      else if (typeIdx === 4) this.drawAgirat();
-      else if (typeIdx === 5) this.drawLeviathan();
-      else this.drawZiz();
-      const names = ["", "תנינא", "כוי", "שד", "אגירת", "לויתן", "זיז שדי"]; 
-      const bName = names[typeIdx] || "מזיק";
+
+      // ישיר מיפוי של רמות לבוסים
+      let bName = "";
+      if (this.level === 1) {
+        this.drawTannina();
+        bName = "תנינא";
+      } else if (this.level === 8) {
+        this.drawKoy();
+        bName = "כוי";
+      } else if (this.level === 15) {
+        this.drawShed();
+        bName = "שד";
+      } else if (this.level === 22) {
+        this.drawAshmedai();
+        bName = "אשמדאי";
+      } else if (this.level === 29) {
+        this.drawAgirat();
+        bName = "אגירת";
+      } else if (this.level === 36) {
+        this.drawLeviathan();
+        bName = "לויתן";
+      } else {
+        this.drawZiz();
+        bName = "זיז שדי";
+      }
+
       this.ctx.fillStyle = 'white'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
       this.ctx.font = 'bold 46px Frank Ruhl Libre'; this.ctx.textAlign = 'center'; this.ctx.fillText(bName, 0, 30);
       this.ctx.restore();
@@ -896,6 +922,294 @@ export class GameEngine {
       this.ctx.beginPath(); for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; const r = 130 + (Math.random() * 40); this.ctx.lineTo(Math.cos(angle)*r, Math.sin(angle)*r); }
       this.ctx.closePath(); this.ctx.fill(); this.ctx.stroke(); this.ctx.globalAlpha = 1;
       this.ctx.fillStyle = '#f43f5e'; this.ctx.beginPath(); this.ctx.arc(-35, -25, 12, 0, Math.PI*2); this.ctx.arc(35, -25, 12, 0, Math.PI*2); this.ctx.fill();
+  }
+
+  drawAshmedai() {
+      const pulse = Math.sin(this.gameFrame * 0.12) * 10;
+
+      // Regal demonic king figure
+      this.ctx.fillStyle = '#1a0a1e';
+      this.ctx.strokeStyle = '#7c2d12';
+      this.ctx.lineWidth = 6;
+
+      // Majestic royal body
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, 30, 100, 70, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Royal purple and gold robe
+      this.ctx.fillStyle = '#581c87';
+      this.ctx.strokeStyle = '#a855f7';
+      this.ctx.lineWidth = 4;
+
+      // Upper robe
+      this.ctx.beginPath();
+      this.ctx.moveTo(-80, 20);
+      this.ctx.lineTo(80, 20);
+      this.ctx.lineTo(70, 80);
+      this.ctx.lineTo(-70, 80);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Gold trim on robe
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-75, 25);
+      this.ctx.lineTo(75, 25);
+      this.ctx.stroke();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(-65, 40);
+      this.ctx.lineTo(65, 40);
+      this.ctx.stroke();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(-55, 55);
+      this.ctx.lineTo(55, 55);
+      this.ctx.stroke();
+
+      // Kingly head with demonic features
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.strokeStyle = '#4c1d95';
+      this.ctx.lineWidth = 4;
+      this.ctx.beginPath();
+      this.ctx.ellipse(0, -40, 50, 45, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Majestic crown with spikes
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+
+      // Crown base
+      this.ctx.beginPath();
+      this.ctx.moveTo(-45, -75);
+      this.ctx.lineTo(45, -75);
+      this.ctx.lineTo(40, -85);
+      this.ctx.lineTo(-40, -85);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Crown spikes
+      this.ctx.fillStyle = '#ef4444';
+      for (let i = 0; i < 7; i++) {
+          const spikeX = -35 + i * 10;
+          this.ctx.beginPath();
+          this.ctx.moveTo(spikeX, -85);
+          this.ctx.lineTo(spikeX + 2, -95);
+          this.ctx.lineTo(spikeX + 4, -85);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Crown jewels
+      this.ctx.fillStyle = '#dc2626';
+      this.ctx.beginPath();
+      this.ctx.arc(-20, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.arc(0, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.arc(20, -80, 4, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Piercing yellow eyes
+      this.ctx.shadowBlur = 20;
+      this.ctx.shadowColor = '#fbbf24';
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.beginPath();
+      this.ctx.ellipse(-15, -45, 10, 8, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.ellipse(15, -45, 10, 8, 0, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Black slit pupils
+      this.ctx.shadowBlur = 0;
+      this.ctx.fillStyle = '#000000';
+      this.ctx.beginPath();
+      this.ctx.ellipse(-15, -45, 3, 6, 0, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.ellipse(15, -45, 3, 6, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Sharp demonic horns
+      this.ctx.fillStyle = '#4c1d95';
+      this.ctx.strokeStyle = '#7c3aed';
+      this.ctx.lineWidth = 3;
+
+      // Left horn
+      this.ctx.beginPath();
+      this.ctx.moveTo(-35, -60);
+      this.ctx.quadraticCurveTo(-55, -75, -50, -90);
+      this.ctx.quadraticCurveTo(-45, -80, -35, -65);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Right horn
+      this.ctx.beginPath();
+      this.ctx.moveTo(35, -60);
+      this.ctx.quadraticCurveTo(55, -75, 50, -90);
+      this.ctx.quadraticCurveTo(45, -80, 35, -65);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Regal beard
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.strokeStyle = '#4c1d95';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(-20, -20);
+      this.ctx.quadraticCurveTo(0, 0, 20, -20);
+      this.ctx.quadraticCurveTo(0, 20, -20, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Sharp fangs
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.beginPath();
+      this.ctx.moveTo(-8, -25);
+      this.ctx.lineTo(-12, -15);
+      this.ctx.lineTo(-4, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(8, -25);
+      this.ctx.lineTo(12, -15);
+      this.ctx.lineTo(4, -20);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Royal scepter in right hand
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 3;
+
+      // Scepter shaft
+      this.ctx.beginPath();
+      this.ctx.moveTo(70, 10);
+      this.ctx.lineTo(70, -20);
+      this.ctx.stroke();
+
+      // Scepter orb
+      this.ctx.beginPath();
+      this.ctx.arc(70, -25, 8, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Scepter spikes
+      this.ctx.fillStyle = '#ef4444';
+      for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2;
+          const spikeX = 70 + Math.cos(angle) * 8;
+          const spikeY = -25 + Math.sin(angle) * 8;
+          this.ctx.beginPath();
+          this.ctx.moveTo(spikeX, spikeY);
+          this.ctx.lineTo(spikeX + Math.cos(angle) * 5, spikeY + Math.sin(angle) * 5);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Left hand holding royal seal
+      this.ctx.fillStyle = '#2d1b69';
+      this.ctx.beginPath();
+      this.ctx.arc(-70, 15, 12, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Royal seal
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.strokeStyle = '#d97706';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.arc(-70, 15, 6, 0, Math.PI*2);
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Seal symbol (crown)
+      this.ctx.fillStyle = '#dc2626';
+      this.ctx.beginPath();
+      this.ctx.moveTo(-73, 12);
+      this.ctx.lineTo(-67, 12);
+      this.ctx.lineTo(-70, 8);
+      this.ctx.closePath();
+      this.ctx.fill();
+
+      // Demonic wings
+      this.ctx.fillStyle = '#581c87';
+      this.ctx.strokeStyle = '#7c3aed';
+      this.ctx.lineWidth = 2;
+
+      // Left wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(-90, -10);
+      this.ctx.quadraticCurveTo(-140, -30, -120, 40);
+      this.ctx.quadraticCurveTo(-100, 60, -80, 20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Right wing
+      this.ctx.beginPath();
+      this.ctx.moveTo(90, -10);
+      this.ctx.quadraticCurveTo(140, -30, 120, 40);
+      this.ctx.quadraticCurveTo(100, 60, 80, 20);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.stroke();
+
+      // Wing membranes with demonic patterns
+      this.ctx.fillStyle = '#7c3aed';
+      for (let i = 0; i < 12; i++) {
+          const side = i % 2 === 0 ? -1 : 1;
+          const x = side * (95 + Math.sin(i * 0.8) * 15);
+          const y = -5 + i * 3;
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, y);
+          this.ctx.lineTo(x + side * 20, y + 15);
+          this.ctx.lineTo(x + side * 12, y + 20);
+          this.ctx.closePath();
+          this.ctx.fill();
+      }
+
+      // Royal demonic aura
+      const auraG = this.ctx.createRadialGradient(0, 0, 60, 0, 0, 160 + pulse);
+      auraG.addColorStop(0, 'rgba(88, 28, 135, 0.5)');
+      auraG.addColorStop(0.4, 'rgba(168, 85, 247, 0.3)');
+      auraG.addColorStop(0.7, 'rgba(251, 191, 36, 0.2)');
+      auraG.addColorStop(1, 'transparent');
+      this.ctx.fillStyle = auraG;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, 160 + pulse, 0, Math.PI*2);
+      this.ctx.fill();
+
+      // Floating royal particles - optimized
+      this.ctx.fillStyle = '#fbbf24';
+      this.ctx.globalAlpha = 0.7;
+      for (let i = 0; i < 6; i++) {
+          const angle = (this.gameFrame * 0.04 + i / 6 * Math.PI * 2) % (Math.PI * 2);
+          const distance = 130 + Math.sin(this.gameFrame * 0.06 + i) * 12;
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance;
+          this.ctx.shadowBlur = 8;
+          this.ctx.shadowColor = '#fbbf24';
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, 1.5, 0, Math.PI*2);
+          this.ctx.fill();
+      }
+      this.ctx.shadowBlur = 0;
+      this.ctx.globalAlpha = 1;
   }
 
   drawAgirat() {
@@ -1013,7 +1327,7 @@ export class GameEngine {
       } 
   }
 
-  startBossFight() { 
+  startBossFight() {
       this.bossDamageTaken = false;
       this.boss = { x: this.width / 2, y: -450, targetY: 220, maxHp: 250 + (this.level * 15), hp: 250 + (this.level * 15), currentText: "", frame: 0, attackRate: Math.max(45, 180 - (this.level * 2)) };
       this.onStatsUpdate({ bossActive: true, bossHpPercent: 100, currentWord: "" });
