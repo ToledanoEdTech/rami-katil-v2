@@ -1,0 +1,36 @@
+הוראות ידניות לפתרון בעיות הגיט - אם כל הסקריפטים נכשלים:
+
+שלב 1: העתק את התיקייה למקום חדש
+----------------------------------------
+1. צור תיקייה חדשה: C:\rami-katil-fixed
+2. העתק את כל הקבצים מתיקיית הפרויקט לתיקייה החדשה
+3. השאר בחוץ את node_modules ו-.git
+
+שלב 2: אתחל גיט חדש
+---------------------
+1. פתח Command Prompt
+2. cd C:\rami-katil-fixed
+3. git init
+4. git config user.name "ToledanoEdTech"
+5. git config user.email "toledanoedtech@gmail.com"
+6. git add .
+7. git commit -m "משחק רמי וקטיל - גרסה מתוקנת"
+
+שלב 3: העלה לגיטהב
+--------------------
+1. היכנס ל-GitHub.com
+2. צור ריפו חדש: rami-katil-fixed
+3. git remote add origin [הקישור של הריפו החדש]
+4. git push -u origin main
+
+שלב 4: עדכן את Vercel
+----------------------
+1. היכנס ל-Vercel.com
+2. שנה את הריפו החדש בפרויקט הקיים
+3. או צור פרויקט חדש עם הריפו החדש
+
+אם זה עדיין לא עובד, פשוט העלה את הקבצים ידנית:
+1. היכנס לריפו בגיטהב
+2. Add file -> Upload files
+3. העלה את App.tsx, constants.ts, game/GameEngine.ts, package.json, vercel.json, vite.config.ts, manifest.json, index.html
+
