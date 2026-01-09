@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { GameState, GameStats, LeaderboardEntry, ShopItem, Achievement, Sugia, Word } from './types';
 import { SHOP_ITEMS, SCRIPT_URL, ACHIEVEMENTS, SUGIOT, DICTIONARY } from './constants';
 import { Sound } from './utils/sound';
@@ -95,6 +95,13 @@ function App() {
 
   // Combined Dictionary: Static + Dynamic (Important: this is re-calculated every render)
   const fullDictionary = [...DICTIONARY, ...dynamicWords];
+
+  const getViewportSize = useCallback(() => {
+    const vv = window.visualViewport;
+    const w = Math.floor((vv?.width ?? window.innerWidth) || 0);
+    const h = Math.floor((vv?.height ?? window.innerHeight) || 0);
+    return { w: Math.max(1, w), h: Math.max(1, h) };
+  }, []);
 
   // Fetch Data (Leaderboard + Dynamic Words)
   const fetchData = useCallback(async () => {
@@ -279,16 +286,17 @@ function App() {
     
     requestAnimationFrame((time) => {
         if(canvasRef.current) {
+            const vp = getViewportSize();
             // הגבל רזולוציה למניעת ביצועים איטיים במחשבים עם מסכים גדולים
-            const maxCanvasWidth = isMobile ? window.innerWidth : Math.min(window.innerWidth, 1920);
-            const maxCanvasHeight = isMobile ? window.innerHeight : Math.min(window.innerHeight, 1080);
+            const maxCanvasWidth = isMobile ? vp.w : Math.min(vp.w, 1920);
+            const maxCanvasHeight = isMobile ? vp.h : Math.min(vp.h, 1080);
 
             canvasRef.current.width = maxCanvasWidth;
             canvasRef.current.height = maxCanvasHeight;
 
             // התאם את גודל הקנבס ב-CSS להצגה מלאה
-            canvasRef.current.style.width = window.innerWidth + 'px';
-            canvasRef.current.style.height = window.innerHeight + 'px';
+            canvasRef.current.style.width = vp.w + 'px';
+            canvasRef.current.style.height = vp.h + 'px';
 
             engineRef.current = new GameEngine(
                 canvasRef.current,
@@ -298,7 +306,8 @@ function App() {
                   location: sugia?.location || 'nehardea',
                   modifier: sugia?.modifier || 'wave',
                   sugiaTitle: sugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא'),
-                  customDictionary: dictionaryToUse
+                  customDictionary: dictionaryToUse,
+                  isTeacherPractice: !!customWordList
                 },
                 { bombs: inventory.bombs, shields: inventory.shields, potions: inventory.potions },
                 {
@@ -392,9 +401,17 @@ function App() {
 
   useEffect(() => {
       const handleResize = () => {
+        const vp = getViewportSize();
+        const maxCanvasWidth = isMobile ? vp.w : Math.min(vp.w, 1920);
+        const maxCanvasHeight = isMobile ? vp.h : Math.min(vp.h, 1080);
+
+        // Keep CSS size in sync (important on mobile: address bar + orientation changes)
+        if (canvasRef.current) {
+          canvasRef.current.style.width = vp.w + 'px';
+          canvasRef.current.style.height = vp.h + 'px';
+        }
+
         if(engineRef.current) {
-          const maxCanvasWidth = isMobile ? window.innerWidth : Math.min(window.innerWidth, 1920);
-          const maxCanvasHeight = isMobile ? window.innerHeight : Math.min(window.innerHeight, 1080);
           engineRef.current.resize(maxCanvasWidth, maxCanvasHeight);
         }
       };
@@ -454,6 +471,9 @@ function App() {
       };
 
       window.addEventListener('resize', handleResize);
+      const vv = window.visualViewport;
+      vv?.addEventListener('resize', handleResize);
+      vv?.addEventListener('scroll', handleResize);
       window.addEventListener('mousemove', handleMove);
       window.addEventListener('touchmove', handleMove, {passive: false});
       window.addEventListener('touchstart', handleTouchStart, {passive: true});
@@ -463,6 +483,8 @@ function App() {
       
       return () => {
           window.removeEventListener('resize', handleResize);
+          vv?.removeEventListener('resize', handleResize);
+          vv?.removeEventListener('scroll', handleResize);
           window.removeEventListener('mousemove', handleMove);
           window.removeEventListener('touchmove', handleMove);
           window.removeEventListener('touchstart', handleTouchStart);
@@ -470,7 +492,7 @@ function App() {
           window.removeEventListener('mousedown', handleInput);
           window.removeEventListener('keydown', handleKey);
       };
-  }, [gameLoop, isPaused, gameState, isMobile, isUnitComplete]);
+  }, [gameLoop, isPaused, gameState, isMobile, isUnitComplete, getViewportSize]);
 
   // Render logic... (no changes needed in JSX, logic is mainly in hooks)
   
@@ -518,7 +540,7 @@ const equipSkin = (id: string) => {
 };
 
   const ControlsDisplay = () => (
-    <div className="mt-4 md:mt-8 bg-slate-900/60 p-4 rounded-xl border border-slate-700 text-sm text-slate-300 backdrop-blur-sm shadow-2xl">
+    <div className="mt-4 md:mt-8 rk-glass p-4 rounded-xl border border-slate-700/60 text-sm text-slate-300 shadow-2xl">
       <h3 className="font-bold mb-2 text-white border-b border-slate-700/50 pb-1">מקשי המשחק:</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 text-right">
         <div className="flex justify-between gap-4"><span>תנועה:</span> <span className="text-amber-400 font-bold">עכבר / מגע</span></div>
@@ -546,9 +568,33 @@ const equipSkin = (id: string) => {
       return matchesSearch && matchesCategory;
     });
 
+  const menuDifficultyDecor: Record<GameConfig['difficulty'], { accent: string }> = {
+    easy: { accent: 'var(--rk-blue)' },
+    medium: { accent: 'var(--rk-gold)' },
+    hard: { accent: 'var(--rk-purple)' }
+  };
+
+  const menuCategoryDecor: Record<GameConfig['category'], { accent: string }> = {
+    common: { accent: 'var(--rk-blue)' },
+    berachot: { accent: 'var(--rk-gold)' },
+    bava_kamma: { accent: 'var(--rk-purple)' }
+  };
+
+  const difficultyDecor = menuDifficultyDecor[config.difficulty];
+  const categoryDecor = menuCategoryDecor[config.category];
+
   return (
-    <div className="fixed inset-0 w-full bg-slate-950 text-white overflow-hidden select-none font-rubik" dir="rtl" style={{ touchAction: 'none' }}>
+    <div
+      className="fixed inset-0 w-full bg-slate-950 text-white overflow-hidden select-none font-rubik"
+      dir="rtl"
+      style={{ touchAction: gameState === 'PLAYING' ? 'none' : 'auto' }}
+    >
       <canvas ref={canvasRef} className="block w-full h-full" />
+
+      {/* Animated menu/backdrop (CSS) */}
+      {gameState !== 'PLAYING' && (
+        <Backdrop mode={gameState === 'MENU' ? 'menu' : 'default'} showShips={gameState === 'MENU'} />
+      )}
       
       {unlockNotification && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[200] animate-bounce-slow pointer-events-none w-full max-w-sm px-4">
@@ -565,16 +611,30 @@ const equipSkin = (id: string) => {
       )}
 
       {gameState === 'PLAYING' && (
-        <div className="absolute inset-0 pointer-events-none p-3 md:p-6 flex flex-col justify-between">
+        <div className="absolute inset-0 pointer-events-none rk-safe-overlay flex flex-col justify-between">
             <div className="flex justify-between items-start gap-2" data-ui="true">
-                <div className="bg-slate-900/80 backdrop-blur-md rounded-xl md:rounded-2xl p-2 md:p-4 border border-slate-700 shadow-2xl min-w-[100px] md:min-w-[140px]">
-                    <div className="text-amber-400 font-black text-lg md:text-2xl flex items-center gap-1 md:gap-2">
-                      <GoldCoin size={18} /> {displayScore.toLocaleString()}
+                <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-2 md:p-4 min-w-[132px] md:min-w-[220px]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-amber-400 font-black text-lg md:text-2xl flex items-center gap-1 md:gap-2 leading-none">
+                        <GoldCoin size={18} /> {displayScore.toLocaleString()}
+                      </div>
+                      <div className="text-right">
+                        <div className="rk-hud-label">יחידה {stats.level}</div>
+                        <div className="rk-hud-label">שלב {stats.subLevel}/9</div>
+                      </div>
                     </div>
-                    <div className="text-slate-400 text-[10px] md:text-xs font-bold mt-1 uppercase truncate max-w-[80px] md:max-w-none">{stats.sugiaTitle}</div>
-                    <div className="text-slate-500 text-[8px] md:text-[10px] font-bold uppercase">יחידה {stats.level} | שלב {stats.subLevel}/9</div>
+                    <div className="mt-2 text-slate-200 text-[10px] md:text-xs font-bold uppercase tracking-widest truncate">{stats.sugiaTitle}</div>
+
                     {stats.weaponAmmo && stats.weaponAmmo > 0 && stats.weaponAmmo < 9000 && (
-                        <div className="text-red-400 text-[10px] font-black mt-1">תחמושת: {stats.weaponAmmo}</div>
+                      <div className="mt-2">
+                        <div className="flex items-center justify-between">
+                          <span className="rk-hud-label">Ammo</span>
+                          <span className="text-blue-200 font-black text-xs md:text-sm">{stats.weaponAmmo}/30</span>
+                        </div>
+                        <div className="rk-ammo-bar mt-1">
+                          <div className="rk-ammo-fill" style={{ ['--pct' as any]: `${Math.max(0, Math.min(100, Math.round((stats.weaponAmmo / 30) * 100)))}%` } as any} />
+                        </div>
+                      </div>
                     )}
                 </div>
                 
@@ -584,18 +644,37 @@ const equipSkin = (id: string) => {
                         {stats.currentWord}
                     </div>
                     {stats.bossActive && (
-                        <div className="w-32 md:w-64 h-2 md:h-4 bg-slate-800 rounded-full mt-3 md:mt-6 overflow-hidden border border-red-900/50 shadow-inner mx-auto">
-                            <div className="h-full bg-gradient-to-l from-red-600 to-red-400 transition-all duration-300" style={{width: `${stats.bossHpPercent}%`}}></div>
+                        <div className="mt-3 md:mt-6 mx-auto flex flex-col items-center gap-1 md:gap-2">
+                            <div
+                              className="font-aramaic text-lg md:text-3xl tracking-wide text-white"
+                              style={{
+                                textShadow:
+                                  '0 0 10px rgba(168,85,247,0.85), 0 0 18px rgba(59,130,246,0.55), 2px 2px 0 #000, -1px -1px 0 #000'
+                              }}
+                            >
+                              {stats.bossName || 'בוס'}
+                            </div>
+                            <div className="w-32 md:w-64 h-2 md:h-4 bg-slate-800 rounded-full overflow-hidden border border-red-900/50 shadow-inner">
+                                <div className="h-full bg-gradient-to-l from-red-600 to-red-400 transition-all duration-300" style={{width: `${stats.bossHpPercent}%`}}></div>
+                            </div>
                         </div>
                     )}
                 </div>
 
-                <div className="bg-slate-900/80 backdrop-blur-md rounded-xl md:rounded-2xl p-2 md:p-4 border border-slate-700 shadow-2xl text-left min-w-[80px] md:min-w-[120px]">
-                    <div className="text-red-500 text-lg md:text-2xl">{"❤️".repeat(Math.max(0, stats.lives))}</div>
+                <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-2 md:p-4 min-w-[120px] md:min-w-[220px]">
+                    <div className="flex items-center justify-between">
+                      <div className="rk-hud-label">Hull</div>
+                      <div className="text-slate-200 font-black text-xs md:text-sm">{Math.max(0, stats.lives)}/5</div>
+                    </div>
+                    <div className="mt-2 rk-segbar" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <div key={i} className={`rk-seg ${i < Math.max(0, stats.lives) ? 'is-on' : ''}`} />
+                      ))}
+                    </div>
                 </div>
             </div>
 
-            <div className="flex justify-between items-end w-full pb-10 md:pb-0">
+            <div className="flex justify-between items-end w-full rk-hud-bottom">
                 <div className="flex flex-col gap-4 md:gap-6 pointer-events-auto" data-ui="true">
                     <AbilityButton icon="💣" count={stats.bombs} color="red" onClick={() => engineRef.current?.useBomb()} label="פצצה" shortcut="A" />
                     <AbilityButton icon="🛡️" count={stats.shields} color="blue" onClick={() => engineRef.current?.useShield()} label="מגן" shortcut="S" />
@@ -607,13 +686,13 @@ const equipSkin = (id: string) => {
                       <button 
                         onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); isInputOnUI.current = true; engineRef.current?.fire(); }}
                         onPointerUp={(e) => { isInputOnUI.current = false; }}
-                        className="w-16 h-16 bg-red-600/30 rounded-full border-4 border-white/30 flex items-center justify-center text-3xl shadow-2xl active:scale-90 active:bg-red-600/50 backdrop-blur-sm"
+                        className="rk-hud-panel w-16 h-16 rounded-full border border-red-400/40 flex items-center justify-center text-3xl shadow-[0_0_40px_rgba(239,68,68,0.16)] active:scale-90"
                       >
                         🔥
                       </button>
                     )}
                     <button onClick={(e) => { e.stopPropagation(); if (engineRef.current) { const paused = engineRef.current.togglePause(); setIsPaused(paused); Sound.play('ui_click'); } }}
-                       className="pointer-events-auto w-14 h-14 bg-slate-800/80 rounded-full flex items-center justify-center text-2xl border border-slate-600 active:scale-90 mb-2 md:mb-0">
+                       className="rk-hud-panel pointer-events-auto w-14 h-14 rounded-full flex items-center justify-center text-2xl border border-blue-400/25 active:scale-90 mb-2 md:mb-0">
                        ⏸️
                     </button>
                 </div>
@@ -621,33 +700,33 @@ const equipSkin = (id: string) => {
 
             {isPaused && (
                 <div className="absolute inset-0 bg-black/80 backdrop-blur-md pointer-events-auto flex flex-col items-center justify-center z-[100] p-6">
-                    <h2 className="text-5xl md:text-7xl font-black mb-6 drop-shadow-2xl text-white">הפסקה</h2>
+                    <h2 className="text-5xl md:text-7xl font-black mb-6 rk-neon-subtitle">הפסקה</h2>
                     <div className="flex flex-col gap-4 md:gap-6 w-full max-w-xs">
-                        <button onClick={() => { engineRef.current?.togglePause(); setIsPaused(false); Sound.play('ui_click'); }} className="bg-blue-600 p-4 md:p-5 rounded-2xl text-xl md:text-2xl font-black shadow-xl active:scale-95 border-b-4 border-blue-900">המשך</button>
-                        <button onClick={handleReturnToMenu} className="bg-slate-700 p-4 md:p-5 rounded-2xl text-xl md:text-2xl font-black shadow-xl active:scale-95 border-b-4 border-slate-900">תפריט ראשי</button>
+                        <button onClick={() => { engineRef.current?.togglePause(); setIsPaused(false); Sound.play('ui_click'); }} className="rk-btn rk-btn-primary text-xl md:text-2xl">המשך</button>
+                        <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted text-xl md:text-2xl">תפריט ראשי</button>
                         <ControlsDisplay />
                     </div>
                 </div>
             )}
 
             {isUnitComplete && transitionStats && (
-                <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl pointer-events-auto flex flex-col items-center justify-center z-[150] p-6 animate-fade-in">
-                    <div className="bg-slate-900/50 border-2 border-amber-500/30 p-6 md:p-12 rounded-[2rem] shadow-[0_0_50px_rgba(245,158,11,0.2)] text-center max-w-lg w-full">
-                        <h2 className="text-3xl md:text-6xl font-aramaic text-amber-500 mb-2">סיום יחידה!</h2>
+                <div className="absolute inset-0 bg-black/80 backdrop-blur-xl pointer-events-auto flex flex-col items-center justify-center z-[150] p-6 animate-fade-in">
+                    <div className="rk-glass-strong rk-glow border border-amber-400/20 p-6 md:p-12 rounded-[2rem] text-center max-w-lg w-full">
+                        <h2 className="text-3xl md:text-6xl font-aramaic rk-neon-title mb-2">סיום יחידה!</h2>
                         <p className="text-slate-400 text-sm md:text-2xl mb-6 md:mb-8 font-bold">ניצחת את הבוס של {currentSugia?.title || `יחידה ${transitionStats.level}`}</p>
                         
                         <div className="grid grid-cols-2 gap-3 mb-6 md:mb-8">
-                            <div className="bg-slate-800/50 p-3 md:p-4 rounded-2xl border border-slate-700">
+                            <div className="rk-glass rounded-2xl border border-slate-700/60 p-3 md:p-4">
                                 <div className="text-slate-500 text-[10px] md:text-xs font-bold uppercase mb-1">ניקוד מצטבר</div>
                                 <div className="text-lg md:text-2xl font-black text-amber-400">{transitionStats.score.toLocaleString()}</div>
                             </div>
-                            <div className="bg-slate-800/50 p-3 md:p-4 rounded-2xl border border-slate-700">
+                            <div className="rk-glass rounded-2xl border border-slate-700/60 p-3 md:p-4">
                                 <div className="text-slate-500 text-[10px] md:text-xs font-bold uppercase mb-1">רצף (Combo)</div>
                                 <div className="text-lg md:text-2xl font-black text-blue-400">{transitionStats.combo}</div>
                             </div>
                         </div>
 
-                        <button onClick={proceedToNextSugia} className="w-full bg-gradient-to-r from-amber-600 to-yellow-500 p-4 md:p-5 rounded-2xl text-xl md:text-2xl font-black shadow-xl hover:scale-105 active:scale-95 transition-all border-b-4 border-amber-900 text-slate-950">
+                        <button onClick={proceedToNextSugia} className="rk-btn rk-btn-primary w-full text-xl md:text-2xl">
                             עבור לסוגיא הבאה
                         </button>
                     </div>
@@ -664,60 +743,89 @@ const equipSkin = (id: string) => {
       )}
 
       {gameState === 'MENU' && (
-          <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=2000')] bg-cover bg-center flex items-center justify-center h-full">
-              <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md"></div>
-              <div className="relative z-10 flex flex-col items-center p-4 md:p-8 w-full max-w-xl text-center overflow-y-auto max-h-full scrollbar-hide">
-                  <h1 className="font-aramaic text-5xl md:text-9xl bg-gradient-to-b from-amber-200 via-yellow-400 to-amber-700 bg-clip-text text-transparent drop-shadow-[0_10px_10px_rgba(0,0,0,0.5)] mb-1 md:mb-4 animate-bounce-slow">
+          <div className="absolute inset-0 flex items-center justify-center h-full">
+              <div className="relative z-20 flex flex-col items-center p-4 md:p-8 w-[min(92vw,40rem)] text-center overflow-y-auto max-h-[92vh] scrollbar-hide rk-glass-strong rk-glow rounded-[2rem] md:rounded-[2.5rem]">
+                  <h1 className="font-aramaic text-5xl md:text-9xl rk-neon-title mb-1 md:mb-4 animate-bounce-slow tracking-tight">
                       רמי וקטיל
                   </h1>
-                  <p className="text-slate-300 mb-4 md:mb-8 text-sm md:text-2xl font-light tracking-widest border-b border-amber-500/30 pb-2 uppercase">אלוף הארמית - גרסת הקרב</p>
+                  <p className="rk-neon-subtitle mb-4 md:mb-8 text-[11px] md:text-2xl font-light tracking-[0.28em] border-b border-blue-500/20 pb-2 uppercase">
+                    אלוף הארמית - גרסת הקרב
+                  </p>
                   
-                  <div className="flex flex-col gap-4 md:gap-6 w-full px-2 md:px-4 mb-4">
+                  <div className="flex flex-col gap-4 md:gap-6 w-full px-1 md:px-2 mb-4">
                       {customWordList ? (
-                        <div className="bg-amber-600/20 border border-amber-500 p-3 rounded-xl mb-2">
+                        <div className="rk-glass rounded-2xl border border-amber-400/30 p-3 md:p-4 mb-2 text-right">
                            <p className="text-amber-400 font-bold text-sm md:text-lg">נבחר שיעור מורה ({customWordList.length} מילים)</p>
-                           <button onClick={() => { setCustomWordList(null); window.history.replaceState({}, '', window.location.pathname); }} className="text-xs text-white underline mt-1">חזור למילון רגיל</button>
+                           <button onClick={() => { setCustomWordList(null); window.history.replaceState({}, '', window.location.pathname); }} className="text-xs text-slate-200 underline mt-1">חזור למילון רגיל</button>
                         </div>
                       ) : (
                         <div className="grid grid-cols-2 gap-2 md:gap-4">
                           <div className="flex flex-col gap-1 text-right">
-                            <label className="text-slate-500 text-[10px] md:text-xs font-bold mr-2">רמת קושי</label>
-                            <select className="bg-slate-900 border border-slate-700 p-2 md:p-3 rounded-xl text-xs md:text-lg text-white outline-none"
-                              value={config.difficulty} onChange={e => { setConfig({...config, difficulty: e.target.value as any}); Sound.play('ui_click'); }}>
-                                <option value="easy">🌟 קל</option>
-                                <option value="medium">🔥🔥 בינוני</option>
-                                <option value="hard">⚡⚡⚡ קשה</option>
-                            </select>
+                            <label className="rk-hud-label mr-2">רמת קושי</label>
+                            <div className="rk-select-wrap" style={{ ['--accent' as any]: difficultyDecor.accent } as any}>
+                              <select
+                                className="rk-select text-xs md:text-lg"
+                                value={config.difficulty}
+                                onChange={e => { setConfig({...config, difficulty: e.target.value as any}); Sound.play('ui_click'); }}
+                              >
+                                  <option value="easy">קל</option>
+                                  <option value="medium">בינוני</option>
+                                  <option value="hard">קשה</option>
+                              </select>
+                              <span className="rk-select-caret">▾</span>
+                            </div>
                           </div>
                           <div className="flex flex-col gap-1 text-right">
-                            <label className="text-slate-500 text-[10px] md:text-xs font-bold mr-2">קטגוריית מילים</label>
-                            <select className="bg-slate-900 border border-slate-700 p-2 md:p-3 rounded-xl text-xs md:text-lg text-white outline-none"
-                              value={config.category} onChange={e => { setConfig({...config, category: e.target.value as any}); Sound.play('ui_click'); }}>
-                                <option value="common">📖 מילים נפוצות</option>
-                                <option value="berachot">🍷 מסכת ברכות</option>
-                                <option value="bava_kamma">⚖️ מסכת בבא קמא</option>
-                            </select>
+                            <label className="rk-hud-label mr-2">קטגוריית מילים</label>
+                            <div className="rk-select-wrap" style={{ ['--accent' as any]: categoryDecor.accent } as any}>
+                              <select
+                                className="rk-select text-xs md:text-lg"
+                                value={config.category}
+                                onChange={e => { setConfig({...config, category: e.target.value as any}); Sound.play('ui_click'); }}
+                              >
+                                  <option value="common">מילים נפוצות</option>
+                                  <option value="berachot">מסכת ברכות</option>
+                                  <option value="bava_kamma">מסכת בבא קמא</option>
+                              </select>
+                              <span className="rk-select-caret">▾</span>
+                            </div>
                           </div>
                         </div>
                       )}
 
-                      <button onClick={() => navigateTo('MAP')} className="group relative bg-gradient-to-r from-amber-700 to-amber-500 p-4 md:p-6 rounded-2xl text-xl md:text-4xl font-black shadow-[0_0_30px_rgba(251,191,36,0.4)] hover:scale-105 transition-all border-b-4 border-amber-900 active:translate-y-1 active:border-b-0 overflow-hidden text-white">
-                          נתיב הסוגיות
+                      <button onClick={() => navigateTo('MAP')} className="rk-btn rk-btn-primary w-full text-xl md:text-4xl flex items-center justify-center gap-3">
+                          <MenuIcon name="map" />
+                          <span>נתיב הסוגיות</span>
                       </button>
                       <div className="grid grid-cols-2 gap-2 md:gap-4 text-white">
-                          <button onClick={() => navigateTo('SHOP')} className="bg-slate-800/80 p-2 md:p-5 rounded-xl border border-slate-700 text-xs md:text-xl font-bold transition-all shadow-lg hover:scale-105 hover:border-amber-500/50 hover:shadow-amber-500/20 active:scale-95 active:translate-y-1">🛒 חנות</button>
-                          <button onClick={() => navigateTo('LEADERBOARD')} className="bg-amber-800/80 p-2 md:p-5 rounded-xl border border-amber-700 text-xs md:text-xl font-bold transition-all shadow-lg hover:scale-105 hover:border-amber-400/50 hover:shadow-amber-400/20 active:scale-95 active:translate-y-1">🏆 אלופים</button>
+                          <button onClick={() => navigateTo('SHOP')} className="rk-btn rk-btn-muted text-xs md:text-xl flex items-center justify-center gap-2">
+                            <MenuIcon name="shop" />
+                            <span>חנות</span>
+                          </button>
+                          <button onClick={() => navigateTo('LEADERBOARD')} className="rk-btn rk-btn-muted text-xs md:text-xl flex items-center justify-center gap-2">
+                            <MenuIcon name="leaderboard" />
+                            <span>אלופים</span>
+                          </button>
                       </div>
                       <div className="grid grid-cols-2 gap-2 md:gap-4 text-white">
-                          <button onClick={() => navigateTo('ACHIEVEMENTS')} className="bg-purple-800/80 p-2 md:p-5 rounded-xl border border-purple-700 text-xs md:text-xl font-bold transition-all shadow-lg hover:scale-105 hover:border-purple-400/50 hover:shadow-purple-400/20 active:scale-95 active:translate-y-1">📜 הישגים</button>
-                          <button onClick={() => navigateTo('TEACHER')} className="bg-blue-800/80 p-2 md:p-5 rounded-xl border border-blue-700 text-xs md:text-xl font-bold transition-all shadow-lg flex items-center justify-center gap-2 hover:scale-105 hover:border-blue-400/50 hover:shadow-blue-400/20 active:scale-95 active:translate-y-1">🎓 מצב מורה</button>
+                          <button onClick={() => navigateTo('ACHIEVEMENTS')} className="rk-btn rk-btn-muted text-xs md:text-xl flex items-center justify-center gap-2">
+                            <MenuIcon name="achievements" />
+                            <span>הישגים</span>
+                          </button>
+                          <button onClick={() => navigateTo('TEACHER')} className="rk-btn rk-btn-muted text-xs md:text-xl flex items-center justify-center gap-2">
+                            <MenuIcon name="teacher" />
+                            <span>מצב מורה</span>
+                          </button>
                       </div>
-                      <button onClick={() => navigateTo('INSTRUCTIONS')} className="bg-slate-800 p-2 md:p-4 rounded-xl border border-slate-700 text-xs md:text-lg font-bold transition-all shadow-lg hover:scale-105 hover:border-slate-500 active:scale-95 text-slate-300 w-full">📖 מדריך ועזרה</button>
+                      <button onClick={() => navigateTo('INSTRUCTIONS')} className="rk-btn rk-btn-muted w-full text-xs md:text-lg flex items-center justify-center gap-2">
+                        <MenuIcon name="instructions" />
+                        <span>מדריך ועזרה</span>
+                      </button>
                   </div>
                   
                   {/* Credit Section */}
                   <div className="mt-4 flex flex-col items-center justify-center opacity-80 hover:opacity-100 transition-opacity pb-8">
-                      <span className="text-amber-500/80 text-[10px] md:text-xs font-bold tracking-widest mb-1">נוצר ע"י יוסף טולידנו</span>
+                      <span className="text-amber-400/80 text-[10px] md:text-xs font-bold tracking-widest mb-1">נוצר ע"י יוסף טולידנו</span>
                       <img
                           src="https://drive.google.com/thumbnail?id=1Tu5_e7jgTsQHCr0yV_8d-9CbWwOwL7UM&sz=w1000"
                           alt="Yosef Toledano Logo"
@@ -730,16 +838,17 @@ const equipSkin = (id: string) => {
 
       {/* Instructions Screen */}
       {gameState === 'INSTRUCTIONS' && (
-          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
               <div className="w-full max-w-4xl pb-10">
-                  <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                      <button onClick={handleReturnToMenu} className="bg-slate-800 px-4 py-2 md:px-8 md:py-3 rounded-xl font-bold text-xs md:text-lg shadow-lg">חזור</button>
-                      <h2 className="text-2xl md:text-5xl font-aramaic text-amber-500 font-black">מדריך למשחק</h2>
+                  <div className="rk-glass-strong rounded-3xl px-4 py-4 md:px-8 md:py-6 mb-6 flex justify-between items-center gap-4">
+                      <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted px-4 py-2 md:px-8 md:py-3 text-xs md:text-lg">חזור</button>
+                      <h2 className="text-2xl md:text-6xl font-aramaic rk-neon-title font-black">מדריך למשחק</h2>
+                      <div className="hidden md:block rk-hud-label">Controls • HUD • Shop</div>
                   </div>
 
                   <div className="space-y-6 md:space-y-8">
                       {/* Section 1: How to Play */}
-                      <section className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
+                      <section className="rk-glass p-6 rounded-3xl border border-slate-800/60">
                           <h3 className="text-xl md:text-3xl font-aramaic text-blue-400 mb-4 font-bold border-b border-blue-900/30 pb-2">🎯 איך משחקים?</h3>
                           <p className="text-sm md:text-lg text-slate-300 leading-relaxed">
                               במרכז המסך מופיעה מילה בארמית (למשל: "רַחֲמָנָא"). <br/>
@@ -749,10 +858,10 @@ const equipSkin = (id: string) => {
                       </section>
 
                       {/* Section 2: Controls */}
-                      <section className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
+                      <section className="rk-glass p-6 rounded-3xl border border-slate-800/60">
                           <h3 className="text-xl md:text-3xl font-aramaic text-green-400 mb-4 font-bold border-b border-green-900/30 pb-2">🎮 מקשים ושליטה</h3>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              <div className="bg-slate-800/50 p-4 rounded-xl">
+                              <div className="rk-glass p-4 rounded-2xl border border-slate-800/60">
                                   <h4 className="font-bold text-white mb-2 flex items-center gap-2"><span className="text-xl">💻</span> מחשב</h4>
                                   <ul className="text-sm md:text-base text-slate-300 space-y-2">
                                       <li><span className="text-amber-400 font-bold">עכבר:</span> הזזת המטוס</li>
@@ -763,7 +872,7 @@ const equipSkin = (id: string) => {
                                       <li><span className="text-amber-400 font-bold">Esc:</span> עצירה</li>
                                   </ul>
                               </div>
-                              <div className="bg-slate-800/50 p-4 rounded-xl">
+                              <div className="rk-glass p-4 rounded-2xl border border-slate-800/60">
                                   <h4 className="font-bold text-white mb-2 flex items-center gap-2"><span className="text-xl">📱</span> טלפון / טאבלט</h4>
                                   <ul className="text-sm md:text-base text-slate-300 space-y-2">
                                       <li><span className="text-amber-400 font-bold">גרירה:</span> הזזת המטוס</li>
@@ -775,14 +884,14 @@ const equipSkin = (id: string) => {
                       </section>
 
                       {/* Section 3: Scoring */}
-                      <section className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
+                      <section className="rk-glass p-6 rounded-3xl border border-slate-800/60">
                           <h3 className="text-xl md:text-3xl font-aramaic text-amber-400 mb-4 font-bold border-b border-amber-900/30 pb-2">🏆 שיטת הניקוד</h3>
                           <div className="text-sm md:text-lg text-slate-300 space-y-3">
                               <p>הניקוד בסיס לכל פגיעה תלוי ברמת הקושי:</p>
                               <div className="flex gap-4 mb-2">
-                                  <span className="bg-slate-800 px-3 py-1 rounded text-green-400">קל: 100</span>
-                                  <span className="bg-slate-800 px-3 py-1 rounded text-orange-400">בינוני: 200</span>
-                                  <span className="bg-slate-800 px-3 py-1 rounded text-red-500">קשה: 400</span>
+                                  <span className="rk-glass px-3 py-1 rounded text-green-400 border border-slate-800/60">קל: 100</span>
+                                  <span className="rk-glass px-3 py-1 rounded text-orange-400 border border-slate-800/60">בינוני: 200</span>
+                                  <span className="rk-glass px-3 py-1 rounded text-red-500 border border-slate-800/60">קשה: 400</span>
                               </div>
                               <p><span className="text-amber-400 font-bold">בונוס רצף (Combo):</span> כל פגיעה רצופה מכפילה את הניקוד! רצף של 10 פגיעות ומעלה מזכה בתואר "צורבא מרבנן".</p>
                               <p><span className="text-amber-400 font-bold">בוס:</span> ניצחון על הבוס מעניק 10,000 נקודות. ניצחון ללא פגיעה מעניק הישג מיוחד.</p>
@@ -790,54 +899,55 @@ const equipSkin = (id: string) => {
                       </section>
 
                       {/* Section 4: Stages */}
-                      <section className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
+                      <section className="rk-glass p-6 rounded-3xl border border-slate-800/60">
                           <h3 className="text-xl md:text-3xl font-aramaic text-purple-400 mb-4 font-bold border-b border-purple-900/30 pb-2">🌍 סוגי השלבים (סוגיות)</h3>
                           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs md:text-sm text-slate-300">
-                              <div className="bg-slate-800 p-2 rounded">🌊 <span className="font-bold">נהרדעא:</span> אויבים נעים בגל</div>
-                              <div className="bg-slate-800 p-2 rounded">🔥 <span className="font-bold">סורא:</span> אותיות אש נופלות</div>
-                              <div className="bg-slate-800 p-2 rounded">📜 <span className="font-bold">פומבדיתא:</span> מילים קטנות ומהירות</div>
-                              <div className="bg-slate-800 p-2 rounded">💨 <span className="font-bold">בירא דלוות:</span> רוח סוחפת את המטוס</div>
-                              <div className="bg-slate-800 p-2 rounded">👁️ <span className="font-bold">מחוזא:</span> אויבים נעלמים ומופיעים</div>
-                              <div className="bg-slate-800 p-2 rounded">🌑 <span className="font-bold">מתא מחסיא:</span> חושך, רואים רק קרוב</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">🌊 <span className="font-bold">נהרדעא:</span> אויבים נעים בגל</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">🔥 <span className="font-bold">סורא:</span> אותיות אש נופלות</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">📜 <span className="font-bold">פומבדיתא:</span> מילים קטנות ומהירות</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">💨 <span className="font-bold">בירא דלוות:</span> רוח סוחפת את המטוס</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">👁️ <span className="font-bold">מחוזא:</span> אויבים נעלמים ומופיעים</div>
+                              <div className="rk-glass p-2 rounded border border-slate-800/60">🌑 <span className="font-bold">מתא מחסיא:</span> חושך, רואים רק קרוב</div>
                           </div>
                       </section>
                   </div>
-                  <button onClick={handleReturnToMenu} className="bg-slate-700 px-10 md:px-16 py-3 md:py-4 rounded-xl md:rounded-2xl text-lg md:text-2xl font-black mx-auto block mt-10 shadow-xl border-b-4 border-slate-900 active:border-b-0 active:translate-y-1 transition-all">הבנתי, בוא נתחיל!</button>
+                  <button onClick={handleReturnToMenu} className="rk-btn rk-btn-primary mx-auto block mt-10 text-lg md:text-2xl">הבנתי, בוא נתחיל!</button>
               </div>
           </div>
       )}
 
       {/* שאר הקוד נשאר זהה... */}
       {gameState === 'TEACHER' && !isTeacherAuthenticated && (
-          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 z-[100] h-full">
-              <div className="bg-slate-900 p-8 rounded-3xl border border-slate-700 shadow-2xl max-w-sm w-full text-center">
-                  <h2 className="text-3xl font-aramaic text-blue-400 mb-6">כניסת מורה</h2>
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center justify-center p-6 z-[100] h-full">
+              <div className="rk-glass-strong rk-glow p-8 rounded-3xl border border-blue-500/20 max-w-sm w-full text-center">
+                  <h2 className="text-3xl font-aramaic rk-neon-subtitle mb-6">כניסת מורה</h2>
                   <input type="password" placeholder="הכנס קוד גישה" value={teacherAuthPass} onChange={e => setTeacherAuthPass(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-center text-white mb-6 outline-none focus:border-blue-500 transition-colors" />
+                      className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-center text-white mb-6 outline-none focus:border-blue-500 transition-colors" />
                   <div className="flex gap-4">
-                      <button onClick={() => { if(teacherAuthPass === '123123') { setIsTeacherAuthenticated(true); Sound.play('powerup'); fetchData(); } else { alert('קוד שגוי!'); setTeacherAuthPass(''); } }} className="flex-1 bg-blue-600 p-4 rounded-xl font-black text-white">כניסה</button>
-                      <button onClick={handleReturnToMenu} className="flex-1 bg-slate-800 p-4 rounded-xl font-black text-white">ביטול</button>
+                      <button onClick={() => { if(teacherAuthPass === '123123') { setIsTeacherAuthenticated(true); Sound.play('powerup'); fetchData(); } else { alert('קוד שגוי!'); setTeacherAuthPass(''); } }} className="rk-btn rk-btn-primary flex-1">כניסה</button>
+                      <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted flex-1">ביטול</button>
                   </div>
               </div>
           </div>
       )}
 
       {gameState === 'TEACHER' && isTeacherAuthenticated && (
-          <div className="absolute inset-0 bg-slate-950 flex flex-col z-[100] p-4 md:p-8 overflow-y-auto md:overflow-hidden h-full">
+          <div className="absolute inset-0 bg-transparent flex flex-col z-[100] p-4 md:p-8 overflow-y-auto md:overflow-hidden h-full">
               <div className="max-w-4xl w-full mx-auto flex flex-col h-full text-white">
-                  <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                      <button onClick={handleReturnToMenu} className="bg-slate-800 px-4 py-2 md:px-8 md:py-3 rounded-xl font-bold text-xs md:text-lg">חזור</button>
-                      <h2 className="text-2xl md:text-6xl font-aramaic text-blue-400 font-black">ממשק מורה</h2>
+                  <div className="rk-glass-strong rounded-3xl px-4 py-4 md:px-8 md:py-6 mb-6 flex justify-between items-center gap-4">
+                      <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted px-4 py-2 md:px-8 md:py-3 text-xs md:text-lg">חזור</button>
+                      <h2 className="text-2xl md:text-6xl font-aramaic rk-neon-subtitle font-black">ממשק מורה</h2>
+                      <div className="hidden md:block rk-hud-label">Teacher Mode</div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-auto md:h-full overflow-visible md:overflow-hidden pb-10 md:pb-0">
                     {/* Left Side: Word Selector */}
-                    <div className="flex flex-col h-[55vh] md:h-full overflow-hidden bg-slate-900/40 p-4 rounded-3xl border border-slate-800">
+                    <div className="flex flex-col h-[55vh] md:h-full overflow-hidden rk-glass p-4 rounded-3xl border border-slate-800/60">
                         <h3 className="text-white font-bold mb-4 text-center">בניית שיעור מתוך המילון</h3>
                         
                         <div className="space-y-3 mb-4">
                           <input type="text" placeholder="🔍 חפש מילה..." value={teacherSearchTerm} onChange={e => setTeacherSearchTerm(e.target.value)}
-                              className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-blue-500" />
+                              className="w-full rk-glass border border-slate-700/60 rounded-xl p-3 text-white outline-none focus:border-blue-500" />
                           
                           <div className="flex flex-wrap gap-2 justify-center">
                               {[
@@ -877,27 +987,27 @@ const equipSkin = (id: string) => {
                                 );
                             })}
                         </div>
-                        <button onClick={generateTeacherLink} className="bg-blue-600 py-4 rounded-xl font-black text-lg active:scale-95 transition-all text-white">צור קישור לשיעור ({teacherSelectedIndices.length})</button>
+                        <button onClick={generateTeacherLink} className="rk-btn rk-btn-primary py-4 rounded-xl font-black text-lg text-white">צור קישור לשיעור ({teacherSelectedIndices.length})</button>
                     </div>
 
                     {/* Right Side: Add New Word */}
-                    <div className="bg-slate-900/80 p-6 rounded-3xl border border-blue-500/30 flex flex-col h-auto md:h-auto">
-                        <h3 className="text-blue-400 font-black text-xl mb-6 text-center">הוספת מילה קבועה למילון</h3>
+                    <div className="rk-glass-strong p-6 rounded-3xl border border-blue-500/20 flex flex-col h-auto md:h-auto">
+                        <h3 className="rk-neon-subtitle font-black text-xl mb-6 text-center">הוספת מילה קבועה למילון</h3>
                         <div className="space-y-4 flex-1">
                             <div>
                                 <label className="text-slate-400 text-xs block mb-1">מילה בארמית (עם ניקוד)</label>
                                 <input type="text" value={newWordAramaic} onChange={e => setNewWordAramaic(e.target.value)} placeholder="לדוגמא: תַּנְיָא"
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
+                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
                             </div>
                             <div>
                                 <label className="text-slate-400 text-xs block mb-1">תרגום לעברית</label>
                                 <input type="text" value={newWordHebrew} onChange={e => setNewWordHebrew(e.target.value)} placeholder="לדוגמא: שנויה בברייתא"
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
+                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
                             </div>
                             <div>
                                 <label className="text-slate-400 text-xs block mb-1">קטגוריה</label>
                                 <select value={newWordCategory} onChange={e => setNewWordCategory(e.target.value as any)}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-white outline-none focus:border-blue-500">
+                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-white outline-none focus:border-blue-500">
                                     <option value="common">מילים נפוצות</option>
                                     <option value="berachot">מסכת ברכות</option>
                                     <option value="bava_kamma">מסכת בבא קמא</option>
@@ -908,7 +1018,7 @@ const equipSkin = (id: string) => {
                             </div>
                         </div>
                         <button onClick={handleAddNewWord} disabled={isAddingWord}
-                            className="mt-6 w-full bg-blue-500 hover:bg-blue-400 py-5 rounded-2xl font-black text-xl shadow-xl active:scale-95 transition-all disabled:opacity-50 text-white">
+                            className="mt-6 w-full rk-btn rk-btn-primary py-5 rounded-2xl font-black text-xl disabled:opacity-50 text-white">
                             {isAddingWord ? 'מוסיף...' : 'הוסף למילון הקבוע'}
                         </button>
                     </div>
@@ -918,14 +1028,13 @@ const equipSkin = (id: string) => {
       )}
 
       {gameState === 'MAP' && (
-          <div className="absolute inset-0 bg-[#fbf3db] flex flex-col z-[50] overflow-hidden h-full">
-              <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/parchment.png')]"></div>
-              <div className="absolute inset-0 border-[10px] md:border-[30px] border-amber-900/10 pointer-events-none"></div>
-
-              <div className="relative z-10 p-3 md:p-8 flex justify-between items-center bg-amber-900/10 border-b-4 border-amber-900/30 backdrop-blur-sm">
-                <button onClick={handleReturnToMenu} className="bg-amber-800 text-white px-4 py-2 md:px-8 md:py-3 rounded-xl font-bold text-xs md:text-lg shadow-lg">חזור</button>
-                <h2 className="text-2xl md:text-6xl font-aramaic text-amber-900 font-black tracking-tighter">דף הסוגיות</h2>
-                <div className="bg-white/60 px-3 py-1 md:px-6 md:py-2 rounded-full border-2 border-amber-900/30 font-black text-amber-900 text-[10px] md:text-base">רמה: {maxLevelReached}</div>
+          <div className="absolute inset-0 bg-transparent flex flex-col z-[50] overflow-hidden h-full text-white">
+              <div className="relative z-10 p-3 md:p-6 flex justify-between items-center rk-glass-strong border-b border-blue-500/10">
+                <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted px-4 py-2 md:px-8 md:py-3 text-xs md:text-lg">חזור</button>
+                <h2 className="text-2xl md:text-6xl font-aramaic rk-neon-title font-black tracking-tighter">דף הסוגיות</h2>
+                <div className="rk-glass rounded-full border border-slate-700/60 font-black text-[10px] md:text-base px-3 py-1 md:px-6 md:py-2">
+                  רמה: <span className="text-amber-300">{maxLevelReached}</span>
+                </div>
               </div>
               
               <div className="flex-1 relative flex items-center justify-start p-4 md:p-12 overflow-x-auto overflow-y-hidden scrollbar-hide">
@@ -937,16 +1046,20 @@ const equipSkin = (id: string) => {
                           return (
                               <div key={sugia.id} className="relative group flex flex-col items-center">
                                   {idx < SUGIOT.length - 1 && (
-                                    <div className={`absolute top-12 md:top-24 left-[5rem] md:left-[10rem] w-8 md:w-20 h-1 ${customWordList || maxLevelReached >= SUGIOT[idx+1].requiredLevel ? 'bg-amber-600' : 'bg-amber-900/10'}`}></div>
+                                    <div className={`absolute top-12 md:top-24 left-[5rem] md:left-[10rem] w-8 md:w-20 h-1 rounded-full
+                                      ${customWordList || maxLevelReached >= SUGIOT[idx+1].requiredLevel ? 'bg-gradient-to-r from-blue-500/70 to-amber-400/70' : 'bg-slate-700/30'}
+                                    `}></div>
                                   )}
                                   <div onClick={() => { if(isUnlocked) { Sound.play('ui_click'); setSelectedSugia(sugia); } }}
-                                      className={`w-20 h-24 md:w-36 md:h-48 rounded-lg border-2 flex flex-col items-center justify-center text-xl md:text-4xl font-aramaic transition-all cursor-pointer relative shadow-2xl
-                                          ${isUnlocked ? (isSelected ? 'border-amber-600 bg-amber-50 scale-110 -translate-y-2 md:-translate-y-4 ring-4 ring-amber-400/20 shadow-amber-900/30' : 'border-amber-900/30 bg-white hover:border-amber-700 hover:scale-105') : 'border-slate-300 bg-slate-100 grayscale opacity-40 cursor-not-allowed'}`}>
-                                      <div className="text-amber-900/30 absolute top-1 right-1 text-[8px] md:text-[10px] font-bold">סוגיא {idx+1}</div>
-                                      <div className="text-amber-900 font-black mb-1 md:mb-2">{isUnlocked ? String.fromCharCode(0x5D0 + (idx % 22)) : '🔒'}</div>
-                                      <div className="text-amber-800/50 text-[8px] md:text-[10px] font-bold">{dafLabel}</div>
+                                      className={`w-20 h-24 md:w-36 md:h-48 rounded-2xl border flex flex-col items-center justify-center text-xl md:text-4xl font-aramaic transition-all cursor-pointer relative
+                                          ${isUnlocked ? (isSelected ? 'rk-glass-strong border-amber-400/40 scale-110 -translate-y-2 md:-translate-y-4 ring-4 ring-amber-400/15' : 'rk-glass border-blue-400/20 hover:border-amber-400/25 hover:scale-105') : 'rk-glass border-slate-700/30 grayscale opacity-40 cursor-not-allowed'}`}>
+                                      <div className="rk-hud-label absolute top-2 right-2">סוגיא {idx+1}</div>
+                                      <div className={`font-black mb-1 md:mb-2 ${isUnlocked ? 'rk-neon-title' : 'text-slate-400'}`}>
+                                        {isUnlocked ? String.fromCharCode(0x5D0 + (idx % 22)) : '🔒'}
+                                      </div>
+                                      <div className="text-slate-300/80 text-[8px] md:text-[10px] font-bold tracking-widest uppercase">{dafLabel}</div>
                                   </div>
-                                  <div className={`mt-2 md:mt-6 font-black text-[10px] md:text-base text-center leading-tight max-w-[80px] md:max-w-140px] ${isUnlocked ? 'text-amber-950' : 'text-slate-400'}`}>{sugia.title}</div>
+                                  <div className={`mt-2 md:mt-6 font-black text-[10px] md:text-base text-center leading-tight max-w-[80px] md:max-w-[140px] ${isUnlocked ? 'text-slate-100' : 'text-slate-500'}`}>{sugia.title}</div>
                               </div>
                           );
                       })}
@@ -954,120 +1067,152 @@ const equipSkin = (id: string) => {
               </div>
 
               {selectedSugia && (
-                  <div className="bg-white/95 backdrop-blur-lg p-3 md:p-10 border-t-4 md:border-t-8 border-amber-900/40 flex flex-col md:flex-row items-center justify-between z-20 shadow-[0_-10px_30px_rgba(0,0,0,0.15)] animate-slide-up gap-2 md:gap-4 pb-10 md:pb-10">
+                  <div className="rk-glass-strong p-3 md:p-8 border-t border-blue-500/15 flex flex-col md:flex-row items-center justify-between z-20 animate-slide-up gap-3 md:gap-6 pb-10 md:pb-10">
                       <div className="text-right w-full md:w-auto">
-                          <h3 className="text-lg md:text-4xl font-black text-amber-900 mb-0 font-aramaic">{selectedSugia.title}</h3>
-                          <p className="text-xs md:text-xl text-amber-800/70 italic max-w-2xl line-clamp-1 md:line-clamp-none">{selectedSugia.description}</p>
+                          <h3 className="text-lg md:text-5xl font-black rk-neon-title mb-0 font-aramaic">{selectedSugia.title}</h3>
+                          <p className="text-xs md:text-xl text-slate-200/75 italic max-w-2xl line-clamp-2 md:line-clamp-none">{selectedSugia.description}</p>
                       </div>
-                      <button onClick={() => startGame(selectedSugia)} className="w-full md:w-auto bg-gradient-to-r from-blue-700 to-blue-500 text-white px-6 md:px-20 py-3 md:py-6 rounded-xl md:rounded-2xl text-lg md:text-4xl font-black shadow-2xl active:scale-95 border-b-4 md:border-b-8 border-blue-900">התחל בסוגיא</button>
+                      <button onClick={() => startGame(selectedSugia)} className="rk-btn rk-btn-primary w-full md:w-auto text-lg md:text-4xl px-6 md:px-20 py-3 md:py-6">התחל בסוגיא</button>
                   </div>
               )}
           </div>
       )}
 
       {gameState === 'SHOP' && (
-          <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full">
-              <div className="w-full max-w-5xl text-white">
-                <div className="flex flex-col md:flex-row justify-between items-center mb-6 md:mb-12 border-b border-slate-800 pb-4 md:pb-6 gap-4">
-                  <h2 className="text-3xl md:text-6xl font-aramaic text-amber-500 drop-shadow-lg">חנות הציוד</h2>
-                  <div className="text-xl md:text-4xl font-black text-white bg-slate-900 px-6 py-2 md:px-8 md:py-3 rounded-full border border-slate-700 shadow-inner flex items-center gap-3">
-                    {coins.toLocaleString()} <GoldCoin size={24} />
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
+              <div className="w-full max-w-6xl">
+                <div className="rk-glass-strong rounded-3xl px-4 py-4 md:px-8 md:py-6 mb-6 md:mb-10 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div className="text-center md:text-right">
+                    <h2 className="text-3xl md:text-7xl font-aramaic rk-neon-title leading-none">חנות הציוד</h2>
+                    <div className="rk-hud-label mt-2">שדרוגים, סקינים ופריטים מתכלים</div>
+                  </div>
+                  <div className="rk-glass rounded-full border border-slate-700/60 px-6 py-2 md:px-8 md:py-3 shadow-inner flex items-center gap-3">
+                    <span className="text-xl md:text-4xl font-black text-white">{coins.toLocaleString()}</span> <GoldCoin size={24} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-8 mb-8 md:mb-12">
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-8 mb-10">
                     {SHOP_ITEMS.map(item => {
                         const owned = item.type === 'skin' ? inventory.skins.includes(item.id) : false;
                         const equipped = inventory.currentSkin === item.id;
                         const locked = item.requiredAchievement && !unlockedAchievements.includes(item.requiredAchievement);
-                        return (
-                            <div key={item.id} onClick={() => owned && item.type === 'skin' ? equipSkin(item.id) : buyItem(item)}
-                              className={`relative p-3 md:p-6 rounded-xl md:rounded-3xl border-2 flex flex-col items-center text-center cursor-pointer transition-all duration-300 group
-                                  ${equipped ? 'border-amber-400 bg-amber-900/20 shadow-lg' : 'border-slate-800 bg-slate-900/50'}
-                                  ${locked ? 'opacity-60 grayscale cursor-not-allowed' : 'hover:scale-105 hover:border-amber-500/30'}
-                              `}>
-                                {/* תצוגה גדולה ואחידה לכל סוג פריט (סקין או חפץ) */}
-{(() => {
-  if (item.type === 'skin') {
-    return (
-      <img
-        src={
-          item.id === 'skin_default' ? '/ships/default.png' :
-          item.id === 'skin_gold' ? '/ships/gold.png' :
-          item.id === 'skin_torah' ? '/ships/torah.png' :
-          item.id === 'skin_butzina' ? '/ships/butzina.png' :
-          item.id === 'skin_choshen' ? '/ships/choshen.png' : undefined
-        }
-        alt={item.name}
-        className="w-24 h-24 md:w-40 md:h-40 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
-        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
-      />
-    );
-  }
-  if (item.id === 'upgrade_bomb') {
-    return (
-      <img
-        src={'/ships/bomb.png'}
-        alt={item.name}
-        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
-        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
-      />
-    );
-  }
-  if (item.id === 'item_shield') {
-    return (
-      <img
-        src={'/ships/shield.png'}
-        alt={item.name}
-        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
-        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
-      />
-    );
-  }
-  if (item.id === 'item_freeze') {
-    return (
-      <img
-        src={'/ships/freeze.png'}
-        alt={item.name}
-        className="w-20 h-20 md:w-36 md:h-36 mb-2 md:mb-6 object-contain drop-shadow-2xl border-4 border-slate-700 bg-slate-950 rounded-xl"
-        style={{ imageRendering: 'auto', background: '#1e293b', objectFit: 'contain' }}
-      />
-    );
-  }
-  // ברירת מחדל רק לאייטמים אחרים (אימוג'י)
-  return (
-    <div className="text-3xl md:text-7xl mb-2 md:mb-6 transform group-hover:scale-110 transition-transform">{item.icon}</div>
-  );
-})()}
+                        const requiredTitle = item.requiredAchievement
+                          ? (ACHIEVEMENTS.find(a => a.id === item.requiredAchievement)?.title || null)
+                          : null;
 
-                                <h3 className="font-black text-white text-[11px] md:text-2xl mb-1 md:mb-2">{item.name}</h3>
-                                <p className="text-[8px] md:text-sm text-slate-400 mb-2 md:mb-6 flex-1 line-clamp-2">{item.desc}</p>
-                                <div className={`w-full py-1.5 md:py-3 rounded-lg md:rounded-xl font-black text-[10px] md:text-base flex items-center justify-center gap-1 md:gap-2 ${owned && item.type === 'skin' ? (equipped ? 'bg-green-600' : 'bg-slate-700') : 'bg-amber-600'}`}>
-                                  {locked ? '🔒 נעול' : (owned && item.type === 'skin' ? (equipped ? 'בשימוש' : 'בחר') : <>{item.price} <GoldCoin size={14} /></>)}
+                        const badge = (() => {
+                          if (locked) return { kind: 'locked' as const, node: <>🔒</> };
+                          if (item.type === 'skin' && equipped) return { kind: 'equipped' as const, node: <>✅</> };
+                          if (item.type === 'skin' && owned) return { kind: 'owned' as const, node: <>בבעלותך</> };
+                          return { kind: 'price' as const, node: <>{item.price} <GoldCoin size={14} /></> };
+                        })();
+
+                        const cta = (() => {
+                          if (locked) return { kind: 'locked' as const, text: 'נדרש הישג' };
+                          if (item.type === 'skin' && equipped) return { kind: 'equipped' as const, text: 'בשימוש' };
+                          if (item.type === 'skin' && owned) return { kind: 'select' as const, text: 'בחר סקין' };
+                          return { kind: 'buy' as const, text: 'קנה' };
+                        })();
+
+                        return (
+                          <TiltCard
+                            key={item.id}
+                            onClick={() => {
+                              return owned && item.type === 'skin' ? equipSkin(item.id) : buyItem(item);
+                            }}
+                            className={`${equipped ? 'ring-2 ring-amber-400/40' : ''} ${locked ? 'ring-2 ring-red-500/15 opacity-90' : ''} cursor-pointer`}
+                          >
+                            <div className="p-4 md:p-6 flex flex-col h-full">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="rk-hud-label">{item.type === 'skin' ? 'Ship Skin' : 'Module'}</div>
+                                <div className={`rk-shop-badge ${
+                                  badge.kind === 'price' ? 'is-price' :
+                                  badge.kind === 'owned' ? 'is-owned' :
+                                  badge.kind === 'equipped' ? 'is-equipped' : 'is-locked'
+                                }`}>
+                                  {badge.node}
                                 </div>
+                              </div>
+
+                              <div className="mt-4 rk-item-frame rk-tilt-layer" style={{ ['--z' as any]: '34px' } as any}>
+                                <div className="rk-item-frame-inner">
+                                  {(() => {
+                                    if (item.type === 'skin') {
+                                      return (
+                                        <img
+                                          src={
+                                            item.id === 'skin_default' ? '/ships/default.png' :
+                                            item.id === 'skin_gold' ? '/ships/gold.png' :
+                                            item.id === 'skin_torah' ? '/ships/torah.png' :
+                                            item.id === 'skin_butzina' ? '/ships/butzina.png' :
+                                            item.id === 'skin_choshen' ? '/ships/choshen.png' : undefined
+                                          }
+                                          alt={item.name}
+                                          draggable={false}
+                                          className="w-32 h-32 md:w-56 md:h-56 object-contain drop-shadow-2xl"
+                                          style={{ imageRendering: 'auto', objectFit: 'contain' }}
+                                        />
+                                      );
+                                    }
+                                    if (item.id === 'upgrade_bomb') {
+                                      return <img src={'/ships/bomb.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                    }
+                                    if (item.id === 'item_shield') {
+                                      return <img src={'/ships/shield.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                    }
+                                    if (item.id === 'item_freeze') {
+                                      return <img src={'/ships/freeze.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                    }
+                                    return <div className="text-6xl md:text-8xl drop-shadow-2xl">{item.icon}</div>;
+                                  })()}
+                                </div>
+                              </div>
+
+                              <h3 className="mt-4 font-black text-white text-lg md:text-3xl">{item.name}</h3>
+                              <p className="mt-1 text-sm md:text-base text-slate-300/85 leading-relaxed flex-1 line-clamp-3">{item.desc}</p>
+
+                              <div className="mt-5">
+                                <div className={`rk-shop-cta ${
+                                  cta.kind === 'buy' ? 'is-buy' :
+                                  cta.kind === 'select' ? 'is-select' :
+                                  cta.kind === 'equipped' ? 'is-equipped' : 'is-locked'
+                                }`}>
+                                  {cta.text}
+                                </div>
+                                {locked && requiredTitle && (
+                                  <div className="mt-2 text-center text-xs md:text-sm font-bold text-slate-200/80">
+                                    דרוש הישג: <span className="text-amber-300">{requiredTitle}</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
+                          </TiltCard>
                         );
                     })}
                 </div>
-                <button onClick={handleReturnToMenu} className="bg-slate-700 px-10 md:px-16 py-3 md:py-4 rounded-xl md:rounded-2xl text-lg md:text-2xl font-black mx-auto block mb-12">חזור</button>
+
+                <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted mx-auto block mb-10 md:mb-12 text-lg md:text-2xl">
+                  חזור
+                </button>
               </div>
           </div>
       )}
 
       {gameState === 'LEADERBOARD' && (
-          <div className="absolute inset-0 bg-slate-950/98 flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
               <div className="w-full max-w-4xl">
-                  <h2 className="text-3xl md:text-7xl font-aramaic text-amber-500 text-center mb-6 md:mb-12">טבלת האלופים</h2>
+                  <h2 className="text-3xl md:text-7xl font-aramaic rk-neon-title text-center mb-6 md:mb-12">טבלת האלופים</h2>
                   {loading ? (
                       <div className="text-lg md:text-3xl text-center text-slate-400 animate-pulse">טוען נתונים...</div>
                   ) : (
-                      <div className="bg-slate-900/50 rounded-xl md:rounded-3xl border border-slate-800 overflow-hidden mb-6 md:mb-12">
+                      <div className="rk-glass rounded-xl md:rounded-3xl border border-slate-800/60 overflow-hidden mb-6 md:mb-12">
                           {leaderboard.length === 0 ? (
                             <div className="text-center p-10 text-slate-500 text-xl font-bold">
                                 אין עדיין תוצאות בטבלה. היה הראשון לכבוש את הפסגה!
                             </div>
                           ) : (
                               <table className="w-full text-right border-collapse text-xs md:text-base">
-                                  <thead className="bg-slate-800 text-slate-400 uppercase tracking-widest font-black">
+                                  <thead className="bg-slate-900/60 text-slate-300 uppercase tracking-widest font-black">
                                       <tr>
                                           <th className="p-3 md:p-6">מיקום</th>
                                           <th className="p-3 md:p-6">שם התלמיד</th>
@@ -1083,7 +1228,7 @@ const equipSkin = (id: string) => {
                                           else if (idx === 2) rank = "🥉";
 
                                           return (
-                                              <tr key={idx} className={`border-b border-slate-800 ${idx < 3 ? 'bg-amber-900/10' : ''}`}>
+                                              <tr key={idx} className={`border-b border-slate-800/60 ${idx < 3 ? 'bg-amber-500/10' : ''}`}>
                                                   <td className="p-3 md:p-6 text-sm md:text-3xl font-black text-slate-500 text-center">{rank}</td>
                                                   <td className="p-3 md:p-6 text-xs md:text-xl font-bold text-white truncate max-w-[150px]">{entry.name}</td>
                                                   <td className="p-3 md:p-6 text-[10px] md:text-lg text-slate-400 truncate max-w-[100px]">{entry.class}</td>
@@ -1098,20 +1243,20 @@ const equipSkin = (id: string) => {
                           )}
                       </div>
                   )}
-                  <button onClick={handleReturnToMenu} className="bg-slate-700 px-10 md:px-16 py-3 md:py-4 rounded-xl md:rounded-2xl text-lg md:text-2xl font-black mx-auto block mb-12">חזור</button>
+                  <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted mx-auto block mb-12 text-lg md:text-2xl">חזור</button>
               </div>
           </div>
       )}
 
       {gameState === 'ACHIEVEMENTS' && (
-          <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
               <div className="w-full max-w-4xl">
-                  <h2 className="text-3xl md:text-7xl font-aramaic text-purple-400 text-center mb-6 md:mb-12">הישגים תורניים</h2>
+                  <h2 className="text-3xl md:text-7xl font-aramaic text-purple-300 text-center mb-6 md:mb-12 drop-shadow-[0_0_24px_rgba(88,28,135,0.35)]">הישגים תורניים</h2>
                   <div className="space-y-3 md:space-y-6 mb-8 md:mb-12">
                       {ACHIEVEMENTS.map(ach => {
                           const unlocked = unlockedAchievements.includes(ach.id);
                           return (
-                              <div key={ach.id} className={`flex items-center gap-3 md:gap-8 p-3 md:p-8 rounded-xl md:rounded-3xl border-2 transition-all ${unlocked ? 'border-purple-500 bg-purple-900/20' : 'border-slate-800 bg-slate-900/30 grayscale opacity-40'}`}>
+                              <div key={ach.id} className={`flex items-center gap-3 md:gap-8 p-3 md:p-8 rounded-xl md:rounded-3xl border transition-all rk-glass ${unlocked ? 'border-purple-400/30' : 'border-slate-800/50 grayscale opacity-40'}`}>
                                   <div className="text-3xl md:text-8xl">{ach.icon}</div>
                                   <div className="text-right flex-1">
                                       <h3 className="text-sm md:text-4xl font-black text-white mb-0.5 md:mb-1">{ach.title}</h3>
@@ -1122,37 +1267,37 @@ const equipSkin = (id: string) => {
                           );
                       })}
                   </div>
-                  <button onClick={handleReturnToMenu} className="bg-slate-700 px-10 md:px-16 py-3 md:py-4 rounded-xl md:rounded-2xl text-lg md:text-2xl font-black mx-auto block mb-12">חזור</button>
+                  <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted mx-auto block mb-12 text-lg md:text-2xl">חזור</button>
               </div>
           </div>
       )}
 
       {gameState === 'GAMEOVER' && (
-          <div className="absolute inset-0 bg-slate-950/98 flex flex-col items-center justify-start pt-10 md:justify-center p-4 md:p-8 z-30 overflow-y-auto scrollbar-hide h-full text-white">
+          <div className="absolute inset-0 bg-transparent flex flex-col items-center justify-start pt-10 md:justify-center p-4 md:p-8 z-30 overflow-y-auto scrollbar-hide h-full text-white">
               <h2 className="text-4xl md:text-8xl text-red-600 font-black mb-3 md:mb-4 font-aramaic drop-shadow-[0_0_20px_rgba(220,38,38,0.3)]">המשחק נגמר</h2>
-              <div className="text-xl md:text-4xl text-amber-500 font-black mb-6 md:mb-12 bg-slate-900 px-6 py-2 md:px-12 md:py-5 rounded-2xl md:rounded-3xl border-2 border-amber-600/30 shadow-2xl flex items-center gap-2 md:gap-4">
+              <div className="rk-glass-strong rk-glow text-xl md:text-4xl text-amber-300 font-black mb-6 md:mb-12 px-6 py-2 md:px-12 md:py-5 rounded-2xl md:rounded-3xl border border-amber-400/20 flex items-center gap-2 md:gap-4">
                 ניקוד: {stats.score.toLocaleString()} <GoldCoin size={24} />
               </div>
-              <div className="bg-slate-900/80 p-5 md:p-8 rounded-2xl md:rounded-3xl w-full max-w-md mb-6 md:mb-12 border border-slate-800">
+              <div className="rk-glass-strong p-5 md:p-8 rounded-2xl md:rounded-3xl w-full max-w-md mb-6 md:mb-12 border border-slate-800/60">
                   <h3 className="text-lg md:text-2xl text-white font-black mb-3 md:mb-6 text-center">שמור תוצאה</h3>
                   <div className="space-y-2 md:space-y-4">
-                    <input type="text" placeholder="שם מלא" value={playerName} onChange={e => setPlayerName(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg md:rounded-xl p-2.5 md:p-4 text-center text-white text-base md:text-xl font-bold outline-none" />
-                    <input type="text" placeholder="כיתה / קבוצה" value={playerClass} onChange={e => setPlayerClass(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg md:rounded-xl p-2.5 md:p-4 text-center text-white text-base md:text-xl font-bold outline-none" />
+                    <input type="text" placeholder="שם מלא" value={playerName} onChange={e => setPlayerName(e.target.value)} className="w-full rk-glass border border-slate-700/60 rounded-lg md:rounded-xl p-2.5 md:p-4 text-center text-white text-base md:text-xl font-bold outline-none" />
+                    <input type="text" placeholder="כיתה / קבוצה" value={playerClass} onChange={e => setPlayerClass(e.target.value)} className="w-full rk-glass border border-slate-700/60 rounded-lg md:rounded-xl p-2.5 md:p-4 text-center text-white text-base md:text-xl font-bold outline-none" />
                     <button onClick={() => {
                         if(!playerName || !playerClass) return alert('נא למלא פרטים');
                         setLoading(true);
                         fetch(SCRIPT_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ name: playerName, class: playerClass, score: stats.score }) })
                           .then(() => { setLoading(false); alert('הציון נשמר!'); handleReturnToMenu(); })
                           .catch(() => { setLoading(false); alert('שגיאה בשמירה'); });
-                    }} disabled={loading} className="w-full bg-green-600 hover:bg-green-500 py-3 md:py-4 rounded-lg md:rounded-xl font-black text-white text-lg md:text-2xl shadow-xl transition-all disabled:opacity-50 hover:scale-[1.05] active:scale-95 border-b-4 border-green-900">
+                    }} disabled={loading} className="w-full rk-btn rk-btn-primary py-3 md:py-4 rounded-lg md:rounded-xl font-black text-white text-lg md:text-2xl disabled:opacity-50">
                         {loading ? 'שומר...' : 'שמור בטבלה'}
                     </button>
                   </div>
               </div>
               <div className="flex gap-2 md:gap-4 w-full max-w-md pb-12 md:pb-0">
-                  <button onClick={() => startGame(selectedSugia || undefined)} className="flex-1 bg-blue-600 px-3 py-3 md:px-8 md:py-5 rounded-xl md:rounded-2xl font-black text-sm md:text-xl transition-all shadow-lg hover:scale-[1.05] hover:bg-blue-500 hover:shadow-blue-500/20 active:scale-95 border-b-4 border-blue-900 text-white">שוב</button>
-                  <button onClick={() => { if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current); engineRef.current = null; Sound.play('ui_click'); setGameState('MAP'); }} className="flex-1 bg-amber-700 px-3 py-3 md:px-8 md:py-5 rounded-xl md:rounded-2xl font-black text-sm md:text-xl transition-all shadow-lg hover:scale-[1.05] hover:bg-amber-600 hover:shadow-amber-500/20 active:scale-95 border-b-4 border-amber-900 text-white">מפה</button>
-                  <button onClick={handleReturnToMenu} className="flex-1 bg-slate-800 px-3 py-3 md:px-8 md:py-5 rounded-xl md:rounded-2xl font-black text-sm md:text-xl transition-all shadow-lg hover:scale-[1.05] hover:bg-slate-700 hover:shadow-slate-500/20 active:scale-95 border-b-4 border-slate-900 text-white">תפריט</button>
+                  <button onClick={() => startGame(selectedSugia || undefined)} className="rk-btn rk-btn-primary flex-1 text-sm md:text-xl">שוב</button>
+                  <button onClick={() => { if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current); engineRef.current = null; Sound.play('ui_click'); setGameState('MAP'); }} className="rk-btn rk-btn-muted flex-1 text-sm md:text-xl">מפה</button>
+                  <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted flex-1 text-sm md:text-xl">תפריט</button>
               </div>
           </div>
       )}
@@ -1160,15 +1305,233 @@ const equipSkin = (id: string) => {
   );
 }
 
+type MenuIconName = 'map' | 'shop' | 'leaderboard' | 'achievements' | 'teacher' | 'instructions';
+
+const MenuIcon = ({ name, className = '' }: { name: MenuIconName; className?: string }) => {
+  const baseProps = {
+    className: `rk-menu-icon ${className}`.trim(),
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    xmlns: 'http://www.w3.org/2000/svg'
+  } as const;
+
+  const common = {
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const
+  };
+
+  switch (name) {
+    case 'map':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6z" />
+          <path {...common} d="M9 4v14" />
+          <path {...common} d="M15 6v14" />
+        </svg>
+      );
+    case 'shop':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M7 7h10l1 14H6L7 7z" />
+          <path {...common} d="M9 7V6a3 3 0 0 1 6 0v1" />
+          <path {...common} d="M9 11h6" />
+        </svg>
+      );
+    case 'leaderboard':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M8 4h8v4a4 4 0 0 1-8 0V4z" />
+          <path {...common} d="M6 4H4v2a4 4 0 0 0 4 4" />
+          <path {...common} d="M18 4h2v2a4 4 0 0 1-4 4" />
+          <path {...common} d="M12 12v4" />
+          <path {...common} d="M9 20h6" />
+          <path {...common} d="M10 16h4" />
+        </svg>
+      );
+    case 'achievements':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M12 2l2.2 5.2 5.6.5-4.3 3.7 1.3 5.5L12 14.9 7.2 17.4 8.5 12 4.2 8.2l5.6-.5L12 2z" />
+        </svg>
+      );
+    case 'teacher':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M12 3l10 5-10 5L2 8l10-5z" />
+          <path {...common} d="M6 10v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5" />
+          <path {...common} d="M22 8v6" />
+        </svg>
+      );
+    case 'instructions':
+      return (
+        <svg {...baseProps}>
+          <path {...common} d="M7 4h10a2 2 0 0 1 2 2v14H7a2 2 0 0 0-2 2V6a2 2 0 0 1 2-2z" />
+          <path {...common} d="M7 20h12" />
+          <path {...common} d="M9 8h6" />
+          <path {...common} d="M9 12h6" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+};
+
+type BackdropMode = 'menu' | 'default';
+
+const Backdrop = ({ mode, showShips }: { mode: BackdropMode; showShips: boolean }) => {
+  const glyphs = useMemo(() => {
+    const chars = [
+      'א','ב','ג','ד','ה','ו','ז','ח','ט','י','כ','ל','מ','נ','ס','ע','פ','צ','ק','ר','ש','ת',
+      'תּ','נְ','יָ','א','רַ','חֲ','מָ','נָ','א','תֵּ','יקוּ','קָ','טַל'
+    ];
+    const palette = [
+      'rgba(251, 191, 36, 0.42)',
+      'rgba(59, 130, 246, 0.45)',
+      'rgba(88, 28, 135, 0.48)'
+    ];
+    const count = mode === 'menu' ? 56 : 34;
+    return Array.from({ length: count }).map((_, i) => {
+      const dur = (mode === 'menu' ? 12 : 16) + Math.random() * (mode === 'menu' ? 10 : 14);
+      const size = (mode === 'menu' ? 14 : 12) + Math.random() * (mode === 'menu' ? 30 : 22);
+      const opacity = (mode === 'menu' ? 0.20 : 0.14) + Math.random() * 0.22;
+      const blur = Math.random() < 0.65 ? 0 : Math.round((Math.random() * 14)) / 10;
+      const x = Math.random() * 100;
+      const delay = -Math.random() * dur; // start mid‑animation for variety
+      const color = palette[Math.floor(Math.random() * palette.length)];
+      const char = chars[Math.floor(Math.random() * chars.length)];
+
+      return {
+        id: `g-${i}`,
+        char,
+        style: {
+          ['--x' as any]: `${x.toFixed(2)}%`,
+          ['--size' as any]: `${size.toFixed(0)}px`,
+          ['--dur' as any]: `${dur.toFixed(2)}s`,
+          ['--delay' as any]: `${delay.toFixed(2)}s`,
+          ['--opacity' as any]: `${opacity.toFixed(2)}`,
+          ['--blur' as any]: `${blur.toFixed(1)}px`,
+          ['--color' as any]: color
+        } as React.CSSProperties
+      };
+    });
+  }, [mode]);
+
+  const ships = useMemo(() => {
+    if (!showShips) return [];
+    const sources = ['/ships/skin_default.png', '/ships/skin_gold.png', '/ships/skin_butzina.png'];
+    return Array.from({ length: 10 }).map((_, i) => {
+      const dur = 14 + Math.random() * 12;
+      const w = 56 + Math.random() * 62;
+      const opacity = 0.10 + Math.random() * 0.20;
+      const scale = 0.85 + Math.random() * 0.55;
+      const rot = (-14 + Math.random() * 18);
+      const x = Math.random() * 100;
+      const delay = -Math.random() * dur;
+      const src = sources[Math.floor(Math.random() * sources.length)];
+      return {
+        id: `s-${i}`,
+        src,
+        style: {
+          ['--x' as any]: `${x.toFixed(2)}%`,
+          ['--dur' as any]: `${dur.toFixed(2)}s`,
+          ['--delay' as any]: `${delay.toFixed(2)}s`,
+          ['--w' as any]: `${w.toFixed(0)}px`,
+          ['--opacity' as any]: `${opacity.toFixed(2)}`,
+          ['--scale' as any]: `${scale.toFixed(2)}`,
+          ['--rot' as any]: `${rot.toFixed(2)}deg`
+        } as React.CSSProperties
+      };
+    });
+  }, [showShips]);
+
+  return (
+    <div className="rk-backdrop z-0" aria-hidden="true">
+      <div className="rk-glyph-layer">
+        {glyphs.map(g => (
+          <span key={g.id} className="rk-glyph" style={g.style}>{g.char}</span>
+        ))}
+      </div>
+      {showShips && (
+        <div className="rk-ship-layer">
+          {ships.map(s => (
+            <img key={s.id} className="rk-bg-ship" src={s.src} alt="" style={s.style} draggable={false} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const TiltCard = ({
+  className = '',
+  onClick,
+  children
+}: {
+  className?: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) => {
+  const ref = useRef<HTMLButtonElement | null>(null);
+
+  const reset = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.setProperty('--rx', '0deg');
+    el.style.setProperty('--ry', '0deg');
+    el.style.setProperty('--sx', '50%');
+    el.style.setProperty('--sy', '30%');
+  }, []);
+
+  const onMove = useCallback((e: React.PointerEvent) => {
+    if (e.pointerType === 'touch') return;
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / Math.max(1, r.width);
+    const py = (e.clientY - r.top) / Math.max(1, r.height);
+    const ry = (px - 0.5) * 12; // rotateY
+    const rx = (0.5 - py) * 10; // rotateX
+    el.style.setProperty('--rx', `${rx.toFixed(2)}deg`);
+    el.style.setProperty('--ry', `${ry.toFixed(2)}deg`);
+    el.style.setProperty('--sx', `${Math.round(px * 100)}%`);
+    el.style.setProperty('--sy', `${Math.round(py * 100)}%`);
+  }, []);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      onPointerMove={onMove}
+      onPointerLeave={reset}
+      onPointerCancel={reset}
+      className={`rk-tilt rk-tilt-card text-right ${className}`}
+      style={{
+        transform: 'perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateZ(0)',
+        transition: 'transform 140ms ease'
+      }}
+    >
+      {children}
+    </button>
+  );
+};
+
 const AbilityButton = ({icon, count, color, onClick, label, shortcut}: {icon:string, count:number, color:string, onClick: () => void, label: string, shortcut: string}) => {
-    const bg = color === 'red' ? 'bg-red-600 active:bg-red-700' : color === 'blue' ? 'bg-blue-600 active:bg-blue-700' : 'bg-purple-600 active:bg-purple-700';
+    const accent =
+      color === 'red'
+        ? { border: 'border-red-400/35', glow: 'shadow-[0_0_34px_rgba(239,68,68,0.14)]' }
+        : color === 'blue'
+          ? { border: 'border-blue-400/35', glow: 'shadow-[0_0_34px_rgba(59,130,246,0.14)]' }
+          : { border: 'border-purple-400/35', glow: 'shadow-[0_0_34px_rgba(168,85,247,0.14)]' };
     return (
         <div className="flex flex-col items-center gap-1 group pointer-events-auto">
           <button onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); Sound.play('ui_click'); if (count > 0) onClick(); }} disabled={count <= 0}
-              className={`w-12 h-12 md:w-20 md:h-20 rounded-2xl flex items-center justify-center text-xl md:text-4xl relative shadow-2xl border-b-4 active:border-b-0 active:translate-y-1 transition-all text-white
-              ${count > 0 ? bg : 'bg-slate-800 grayscale opacity-40 cursor-not-allowed'}`}>
+              className={`rk-hud-panel ${accent.glow} ${accent.border} border w-12 h-12 md:w-20 md:h-20 rounded-2xl flex items-center justify-center text-xl md:text-4xl relative transition-all text-white
+              ${count > 0 ? 'hover:scale-[1.03] active:scale-95' : 'grayscale opacity-40 cursor-not-allowed'}`}>
               {icon}
-              <span className="absolute -top-1 -right-1 md:-top-2 md:-right-2 bg-white text-slate-950 font-black text-[8px] md:text-sm px-1 md:px-2 py-0.5 rounded-full shadow-lg border border-slate-950">{count}</span>
+              <span className="absolute -top-1 -right-1 md:-top-2 md:-right-2 rk-glass text-slate-100 font-black text-[8px] md:text-sm px-1 md:px-2 py-0.5 rounded-full shadow-lg border border-slate-700/60">{count}</span>
           </button>
           <div className="hidden md:flex flex-col items-center opacity-0 group-hover:opacity-100 transition-opacity">
             <span className="text-white text-[10px] font-black tracking-widest uppercase">{label} ({shortcut})</span>

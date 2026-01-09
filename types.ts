@@ -54,6 +54,7 @@ export interface GameStats {
   hasShield: boolean;
   bossActive: boolean;
   bossHpPercent: number;
+  bossName?: string;
   currentWord: string;
   weaponAmmo?: number;
   sugiaTitle?: string;

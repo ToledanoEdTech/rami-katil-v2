@@ -232,54 +232,69 @@ export class GameEngine {
   }
 
   updateJetParticles(dt: number) {
-      // Drastically reduced particle count for performance
-      const streamLength = 4; // Reduced from 12 to 4
-      const segmentSpacing = 15; // Less frequent updates (increased from 8)
+      // Premium quality engine trail
+      const isMobile = this.width < 600;
+      const streamLength = isMobile ? 6 : 10; // More particles for premium look
+      const segmentSpacing = 8;
 
-      // Engine color based on skin - cached
+      // Engine color based on skin - cached with premium colors
       if (!this.cachedEngineColor || this.cachedEngineColor.skin !== this.config.skin) {
           this.cachedEngineColor = {
               skin: this.config.skin,
               color: this.config.skin === 'skin_gold' ? '#fbbf24' :
                      this.config.skin === 'skin_butzina' ? '#a855f7' :
                      this.config.skin === 'skin_stealth' ? '#64748b' :
-                     this.config.skin === 'skin_default' ? '#3b82f6' : '#00ffff'
+                     this.config.skin === 'skin_torah' ? '#f97316' :
+                     this.config.skin === 'skin_choshen' ? '#fbbf24' :
+                     this.config.skin === 'skin_default' ? '#3b82f6' : '#00ffff',
+              secondaryColor: this.config.skin === 'skin_gold' ? '#f59e0b' :
+                              this.config.skin === 'skin_butzina' ? '#c084fc' :
+                              this.config.skin === 'skin_stealth' ? '#475569' :
+                              this.config.skin === 'skin_torah' ? '#dc2626' :
+                              this.config.skin === 'skin_choshen' ? '#a855f7' :
+                              this.config.skin === 'skin_default' ? '#0ea5e9' : '#00aaff'
           };
       }
 
-      // Add new plasma segments much less frequently
+      // Add enhanced plasma segments
       if (this.jetParticles.length < streamLength * 2 &&
           (!this.jetParticles.length || this.jetParticles[this.jetParticles.length - 1].y - this.player.y > segmentSpacing)) {
 
+          // Enhanced scale for texture-based ships
+          const scale = this.texturesLoaded && this.shipTextures[this.config.skin] ? 1.8 : 1.0;
+          const leftOffset = -17 * scale;
+          const rightOffset = 17 * scale;
+          const yOffset = 37 * scale;
+
           this.jetParticles.push({
-              x: this.player.x - 17,
-              y: this.player.y + 37,
-              vx: 0,
+              x: this.player.x + leftOffset,
+              y: this.player.y + yOffset,
+              vx: (Math.random() - 0.5) * 1.5,
               vy: 0,
-              alpha: 0.4, // Slightly increased for visibility
-              size: 1.2, // Smaller size
+              alpha: 0.7, // Increased visibility
+              size: isMobile ? 2.5 : 3.5, // Larger, more visible
               life: streamLength
           });
 
           this.jetParticles.push({
-              x: this.player.x + 17,
-              y: this.player.y + 37,
-              vx: 0,
+              x: this.player.x + rightOffset,
+              y: this.player.y + yOffset,
+              vx: (Math.random() - 0.5) * 1.5,
               vy: 0,
-              alpha: 0.4,
-              size: 1.2,
+              alpha: 0.7,
+              size: isMobile ? 2.5 : 3.5,
               life: streamLength
           });
       }
 
-      // Update plasma segments - simplified
+      // Update plasma segments with premium effects
       for (let i = this.jetParticles.length - 1; i >= 0; i--) {
           const p = this.jetParticles[i];
-          p.life -= dt * 0.6; // Faster decay
-          p.alpha -= 0.005 * dt;
+          p.life -= dt * 0.4; // Slower decay for longer trails
+          p.alpha -= 0.003 * dt;
 
-          p.y += 4.0 * dt; // Faster movement
-          // Removed complex x movement for performance
+          p.y += 3.5 * dt;
+          p.x += p.vx * dt * 0.5; // Subtle spread
 
           if (p.life <= 0 || p.alpha <= 0) {
               this.jetParticles.splice(i, 1);
@@ -287,8 +302,8 @@ export class GameEngine {
       }
 
       // Limit total particles
-      if (this.jetParticles.length > streamLength * 2) {
-          this.jetParticles.splice(0, this.jetParticles.length - streamLength * 2);
+      if (this.jetParticles.length > streamLength * 3) {
+          this.jetParticles.splice(0, this.jetParticles.length - streamLength * 3);
       }
   }
 
@@ -383,7 +398,7 @@ export class GameEngine {
     }
 
     this.updateParallax(dt);
-    // this.updateJetParticles(dt); // Disabled - no trail effect
+    this.updateJetParticles(dt); // ENABLED - Premium engine trail effect
 
     if (this.playerExploding) {
         this.explosionTimer -= dt;
@@ -675,60 +690,103 @@ export class GameEngine {
       this.ctx.save();
       this.ctx.globalCompositeOperation = 'lighter';
 
-      // Use cached color - no shadows for performance
+      // Use cached premium colors
       const plasmaColor = this.cachedEngineColor.color;
+      const secondaryColor = this.cachedEngineColor.secondaryColor;
 
-      // Simplified drawing - no shadows, reduced operations
-      this.ctx.strokeStyle = plasmaColor;
-      this.ctx.lineCap = 'round';
-      this.ctx.lineWidth = 1.5; // Thinner lines
-
-      // Draw all segments in one go - left engine
+      // Draw all segments with premium quality
       const leftParticles = this.jetParticles.filter((_, i) => i % 2 === 0);
-      if (leftParticles.length > 1) {
-          for (let i = 0; i < leftParticles.length - 1; i++) {
-              const p1 = leftParticles[i];
-              const p2 = leftParticles[i + 1];
-
-              this.ctx.globalAlpha = p1.alpha * 0.6;
-              this.ctx.beginPath();
-              this.ctx.moveTo(p1.x, p1.y);
-              this.ctx.lineTo(p2.x, p2.y);
-              this.ctx.stroke();
-          }
-      }
-
-      // Draw all segments - right engine
       const rightParticles = this.jetParticles.filter((_, i) => i % 2 === 1);
-      if (rightParticles.length > 1) {
-          for (let i = 0; i < rightParticles.length - 1; i++) {
-              const p1 = rightParticles[i];
-              const p2 = rightParticles[i + 1];
 
-              this.ctx.globalAlpha = p1.alpha * 0.6;
+      // Function to draw premium engine trail
+      const drawEngineTrail = (particles: typeof leftParticles) => {
+          if (particles.length < 1) return;
+
+          // Outer glow layer
+          this.ctx.strokeStyle = plasmaColor;
+          this.ctx.lineCap = 'round';
+          this.ctx.lineWidth = 8;
+          this.ctx.shadowBlur = 20;
+          this.ctx.shadowColor = plasmaColor;
+
+          for (let i = 0; i < particles.length - 1; i++) {
+              const p1 = particles[i];
+              const p2 = particles[i + 1];
+              this.ctx.globalAlpha = p1.alpha * 0.4;
               this.ctx.beginPath();
               this.ctx.moveTo(p1.x, p1.y);
               this.ctx.lineTo(p2.x, p2.y);
               this.ctx.stroke();
           }
-      }
 
-      // Simple glow effect - no shadows
-      this.ctx.globalAlpha = 0.3;
-      this.ctx.fillStyle = plasmaColor;
+          // Inner bright core
+          this.ctx.strokeStyle = '#ffffff';
+          this.ctx.lineWidth = 3;
+          this.ctx.shadowBlur = 10;
+          this.ctx.shadowColor = '#ffffff';
 
-      // Only draw the last particle of each engine
-      if (leftParticles.length > 0) {
-          const p = leftParticles[leftParticles.length - 1];
-          this.ctx.beginPath();
-          this.ctx.arc(p.x, p.y, p.size * 0.8, 0, Math.PI*2);
-          this.ctx.fill();
-      }
-      if (rightParticles.length > 0) {
-          const p = rightParticles[rightParticles.length - 1];
-          this.ctx.beginPath();
-          this.ctx.arc(p.x, p.y, p.size * 0.8, 0, Math.PI*2);
-          this.ctx.fill();
+          for (let i = 0; i < particles.length - 1; i++) {
+              const p1 = particles[i];
+              const p2 = particles[i + 1];
+              this.ctx.globalAlpha = p1.alpha * 0.7;
+              this.ctx.beginPath();
+              this.ctx.moveTo(p1.x, p1.y);
+              this.ctx.lineTo(p2.x, p2.y);
+              this.ctx.stroke();
+          }
+
+          // Draw premium particles
+          particles.forEach((p, idx) => {
+              // Outer glow
+              const grad = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 3);
+              grad.addColorStop(0, plasmaColor);
+              grad.addColorStop(0.5, secondaryColor);
+              grad.addColorStop(1, 'transparent');
+              
+              this.ctx.fillStyle = grad;
+              this.ctx.globalAlpha = p.alpha * 0.6;
+              this.ctx.shadowBlur = 15;
+              this.ctx.shadowColor = plasmaColor;
+              this.ctx.beginPath();
+              this.ctx.arc(p.x, p.y, p.size * 2.5, 0, Math.PI * 2);
+              this.ctx.fill();
+
+              // Bright center
+              this.ctx.fillStyle = '#ffffff';
+              this.ctx.globalAlpha = p.alpha * 0.9;
+              this.ctx.shadowBlur = 8;
+              this.ctx.shadowColor = '#ffffff';
+              this.ctx.beginPath();
+              this.ctx.arc(p.x, p.y, p.size * 0.8, 0, Math.PI * 2);
+              this.ctx.fill();
+          });
+      };
+
+      // Draw both engine trails
+      drawEngineTrail(leftParticles);
+      drawEngineTrail(rightParticles);
+
+      // Special effects for specific skins
+      if (this.config.skin === 'skin_torah' && leftParticles.length > 0) {
+          // Fire embers for Torah skin
+          [leftParticles, rightParticles].forEach(particles => {
+              particles.forEach(p => {
+                  if (Math.random() < 0.3) {
+                      const emberGrad = this.ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 2);
+                      emberGrad.addColorStop(0, '#ffff00');
+                      emberGrad.addColorStop(0.5, '#ff6600');
+                      emberGrad.addColorStop(1, 'transparent');
+                      
+                      this.ctx.fillStyle = emberGrad;
+                      this.ctx.globalAlpha = p.alpha * 0.5;
+                      this.ctx.beginPath();
+                      this.ctx.arc(p.x + (Math.random() - 0.5) * 10, 
+                                   p.y + Math.random() * 5, 
+                                   p.size * 1.5, 0, Math.PI * 2);
+                      this.ctx.fill();
+                  }
+              });
+          });
       }
 
       this.ctx.restore();
@@ -756,8 +814,8 @@ export class GameEngine {
         this.ctx.fillText(h.text, h.x, h.y); this.ctx.restore();
       });
       if (!this.playerExploding) this.drawPlayer();
-      // Draw jet particles after player
-      // this.drawJetParticles(); // Disabled - no trail effect
+      // Draw jet particles after player for premium visual effect
+      this.drawJetParticles(); // ENABLED - Premium engine trail
       this.bossProjectiles.forEach(p => {
           if (!p) return;
           this.ctx.save();
@@ -818,20 +876,473 @@ export class GameEngine {
       const skin = this.config.skin;
       const isMobile = this.width < 600;
       const isHighRes = this.width > 1200;
-      const scale = isMobile ? 0.55 : 0.75;
-      const time = this.gameFrame * 0.02; // Animation time
-      const pulse = isHighRes ? 1.0 : Math.sin(time) * 0.2 + 0.8; // No pulsing on high-res for performance
+      const baseScale = isMobile ? 0.8 : 1.2; // LARGER SCALE!
+      const scale = baseScale * 2.5; // Make ships MUCH BIGGER!
+      const time = this.gameFrame * 0.02;
+      const pulse = Math.sin(time * 2) * 0.2 + 0.8;
 
-      // Try to use texture first, fallback to vector graphics
-      const shipTexture = this.shipTextures[skin];
-      if (shipTexture && this.texturesLoaded) {
-        this.renderShipWithTexture(shipTexture, scale);
-        return;
+      this.ctx.save();
+      this.ctx.scale(scale, scale);
+      
+      // DRAMATIC banking and tilt effects
+      const tiltOffset = this.player.tilt * 40;
+      const tiltRotation = this.player.tilt * 1.8;
+      const wingFlex = this.player.tilt * 30;
+      
+      this.ctx.translate(tiltOffset, 0);
+      this.ctx.rotate(tiltRotation);
+
+      // ===== חושן המשפט - Colorful gemstone ship =====
+      if (skin === 'skin_choshen') {
+          // Main golden body
+          this.ctx.fillStyle = '#b8860b';
+          this.ctx.strokeStyle = '#ffd700';
+          this.ctx.lineWidth = 4;
+          this.ctx.shadowBlur = 25;
+          this.ctx.shadowColor = '#ffd700';
+          
+          // Central square
+          this.ctx.beginPath();
+          this.ctx.rect(-30, -30, 60, 60);
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // 12 gemstones (4x3 grid)
+          const gems = [
+              ['#ff0000', '#00ff00', '#0000ff', '#ffff00'],
+              ['#ff00ff', '#00ffff', '#ff8800', '#8800ff'],
+              ['#ff0080', '#00ff80', '#0080ff', '#ff8000']
+          ];
+          
+          for (let row = 0; row < 3; row++) {
+              for (let col = 0; col < 4; col++) {
+                  const x = -22 + col * 15;
+                  const y = -20 + row * 14;
+                  const gemPulse = Math.sin(time * 5 + row + col) * 0.15 + 0.85;
+                  
+                  const grad = this.ctx.createRadialGradient(x, y, 0, x, y, 6);
+                  grad.addColorStop(0, '#ffffff');
+                  grad.addColorStop(0.4, gems[row][col]);
+                  grad.addColorStop(1, '#000000');
+                  
+                  this.ctx.fillStyle = grad;
+                  this.ctx.shadowBlur = 20 * gemPulse;
+                  this.ctx.shadowColor = gems[row][col];
+                  this.ctx.beginPath();
+                  this.ctx.arc(x, y, 5 * gemPulse, 0, Math.PI * 2);
+                  this.ctx.fill();
+              }
+          }
+          
+          // Wings
+          this.ctx.fillStyle = '#daa520';
+          this.ctx.strokeStyle = '#ffd700';
+          this.ctx.lineWidth = 3;
+          this.ctx.shadowBlur = 15;
+          this.ctx.shadowColor = '#ffd700';
+          
+          // Left wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(-30, -8);
+          this.ctx.lineTo(-65 + wingFlex, -25);
+          this.ctx.lineTo(-60 + wingFlex, 5);
+          this.ctx.lineTo(-30, 8);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Right wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(30, -8);
+          this.ctx.lineTo(65 - wingFlex, -25);
+          this.ctx.lineTo(60 - wingFlex, 5);
+          this.ctx.lineTo(30, 8);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Engine glow
+          const engineGrad = this.ctx.createRadialGradient(0, 35, 3, 0, 35, 18);
+          engineGrad.addColorStop(0, '#ffffff');
+          engineGrad.addColorStop(0.5, '#ffd700');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.shadowBlur = 35;
+          this.ctx.beginPath();
+          this.ctx.arc(0, 35, 18 * pulse, 0, Math.PI * 2);
+          this.ctx.fill();
       }
-
-      // Fallback to vector graphics if texture not available
-      this.renderShipVector(skin, isMobile, isHighRes, scale, time, pulse);
+      
+      // ===== Stealth - Gray angular ship =====
+      else if (skin === 'skin_stealth') {
+          this.ctx.fillStyle = '#475569';
+          this.ctx.strokeStyle = '#64748b';
+          this.ctx.lineWidth = 3;
+          this.ctx.shadowBlur = 12;
+          this.ctx.shadowColor = '#334155';
+          
+          // Sharp body
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, -55);
+          this.ctx.lineTo(20, -18);
+          this.ctx.lineTo(12, 35);
+          this.ctx.lineTo(-12, 35);
+          this.ctx.lineTo(-20, -18);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Wings
+          this.ctx.fillStyle = '#334155';
+          
+          // Left wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(-20, -18);
+          this.ctx.lineTo(-80 + wingFlex, -8);
+          this.ctx.lineTo(-70 + wingFlex, 12);
+          this.ctx.lineTo(-12, 18);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Right wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(20, -18);
+          this.ctx.lineTo(80 - wingFlex, -8);
+          this.ctx.lineTo(70 - wingFlex, 12);
+          this.ctx.lineTo(12, 18);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Cockpit
+          this.ctx.fillStyle = '#1e293b';
+          this.ctx.shadowBlur = 0;
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, -45);
+          this.ctx.lineTo(8, -28);
+          this.ctx.lineTo(-8, -28);
+          this.ctx.closePath();
+          this.ctx.fill();
+          
+          // Engine
+          const engineGrad = this.ctx.createRadialGradient(0, 40, 3, 0, 40, 12);
+          engineGrad.addColorStop(0, '#94a3b8');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(0, 40, 12 * pulse, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      
+      // ===== בוצינא קדישא - Purple mystical ship =====
+      else if (skin === 'skin_butzina') {
+          const mysticPulse = Math.sin(time * 3) * 0.2 + 0.8;
+          
+          this.ctx.fillStyle = '#7c3aed';
+          this.ctx.strokeStyle = '#a855f7';
+          this.ctx.lineWidth = 4;
+          this.ctx.shadowBlur = 30 * mysticPulse;
+          this.ctx.shadowColor = '#a855f7';
+          
+          // Elongated body
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, -65);
+          this.ctx.lineTo(10, -45);
+          this.ctx.lineTo(15, -8);
+          this.ctx.lineTo(10, 45);
+          this.ctx.lineTo(0, 55);
+          this.ctx.lineTo(-10, 45);
+          this.ctx.lineTo(-15, -8);
+          this.ctx.lineTo(-10, -45);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Wings
+          this.ctx.fillStyle = '#6b21a8';
+          this.ctx.strokeStyle = '#c084fc';
+          
+          // Left wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(-15, -28);
+          this.ctx.lineTo(-75 + wingFlex, -40);
+          this.ctx.lineTo(-65 + wingFlex, -8);
+          this.ctx.lineTo(-15, 0);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Right wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(15, -28);
+          this.ctx.lineTo(75 - wingFlex, -40);
+          this.ctx.lineTo(65 - wingFlex, -8);
+          this.ctx.lineTo(15, 0);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Mystical orb
+          const orbGrad = this.ctx.createRadialGradient(0, -25, 0, 0, -25, 12);
+          orbGrad.addColorStop(0, '#ffffff');
+          orbGrad.addColorStop(0.5, '#d8b4fe');
+          orbGrad.addColorStop(1, '#7c3aed');
+          this.ctx.fillStyle = orbGrad;
+          this.ctx.shadowBlur = 35 * mysticPulse;
+          this.ctx.shadowColor = '#d8b4fe';
+          this.ctx.beginPath();
+          this.ctx.arc(0, -25, 10 * mysticPulse, 0, Math.PI * 2);
+          this.ctx.fill();
+          
+          // Engine
+          const engineGrad = this.ctx.createRadialGradient(0, 55, 5, 0, 55, 22);
+          engineGrad.addColorStop(0, '#ffffff');
+          engineGrad.addColorStop(0.4, '#c084fc');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(0, 55, 22 * pulse, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      
+      // ===== אור החמה - Golden divine ship =====
+      else if (skin === 'skin_gold') {
+          const divinePulse = Math.sin(time * 2.5) * 0.25 + 0.75;
+          
+          this.ctx.fillStyle = '#daa520';
+          this.ctx.strokeStyle = '#ffd700';
+          this.ctx.lineWidth = 5;
+          this.ctx.shadowBlur = 35 * divinePulse;
+          this.ctx.shadowColor = '#ffd700';
+          
+          // Majestic body
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, -60);
+          this.ctx.lineTo(18, -40);
+          this.ctx.lineTo(22, -8);
+          this.ctx.lineTo(18, 28);
+          this.ctx.lineTo(8, 45);
+          this.ctx.lineTo(-8, 45);
+          this.ctx.lineTo(-18, 28);
+          this.ctx.lineTo(-22, -8);
+          this.ctx.lineTo(-18, -40);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Large wings
+          this.ctx.fillStyle = '#b8860b';
+          this.ctx.lineWidth = 4;
+          
+          // Left wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(-22, -18);
+          this.ctx.lineTo(-85 + wingFlex, -35);
+          this.ctx.lineTo(-80 + wingFlex, -2);
+          this.ctx.lineTo(-18, 18);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Right wing
+          this.ctx.beginPath();
+          this.ctx.moveTo(22, -18);
+          this.ctx.lineTo(85 - wingFlex, -35);
+          this.ctx.lineTo(80 - wingFlex, -2);
+          this.ctx.lineTo(18, 18);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Divine rays
+          this.ctx.strokeStyle = 'rgba(255, 215, 0, 0.5)';
+          this.ctx.lineWidth = 2;
+          this.ctx.shadowBlur = 25;
+          for (let i = 0; i < 8; i++) {
+              const angle = (i / 8) * Math.PI * 2 + time * 2;
+              this.ctx.beginPath();
+              this.ctx.moveTo(0, -25);
+              this.ctx.lineTo(Math.cos(angle) * 40, -25 + Math.sin(angle) * 40);
+              this.ctx.stroke();
+          }
+          
+          // Engine
+          const engineGrad = this.ctx.createRadialGradient(0, 45, 5, 0, 45, 28);
+          engineGrad.addColorStop(0, '#ffffff');
+          engineGrad.addColorStop(0.3, '#ffd700');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(0, 45, 28 * pulse, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      
+      // ===== אש התורה - Torah scroll with flames =====
+      else if (skin === 'skin_torah') {
+          const flamePulse = Math.sin(time * 6) * 0.35 + 0.65;
+          
+          // Torah scroll
+          this.ctx.fillStyle = '#f5e6d3';
+          this.ctx.strokeStyle = '#8b4513';
+          this.ctx.lineWidth = 3;
+          this.ctx.shadowBlur = 18;
+          this.ctx.shadowColor = '#ff6600';
+          
+          // Main scroll
+          this.ctx.beginPath();
+          this.ctx.roundRect(-25, -45, 50, 90, 4);
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Wooden handles
+          this.ctx.fillStyle = '#654321';
+          this.ctx.fillRect(-30, -50, 6, 100);
+          this.ctx.fillRect(24, -50, 6, 100);
+          
+          // Hebrew text lines
+          this.ctx.strokeStyle = '#000000';
+          this.ctx.lineWidth = 1;
+          for (let i = 0; i < 6; i++) {
+              this.ctx.beginPath();
+              this.ctx.moveTo(-18, -32 + i * 12);
+              this.ctx.lineTo(18, -32 + i * 12);
+              this.ctx.stroke();
+          }
+          
+          // Animated flames
+          const drawFlame = (x: number, y: number, size: number, shift: number) => {
+              const flameGrad = this.ctx.createRadialGradient(x, y, 0, x, y, size);
+              flameGrad.addColorStop(0, '#ffffff');
+              flameGrad.addColorStop(0.3, '#ffff00');
+              flameGrad.addColorStop(0.6, '#ff6600');
+              flameGrad.addColorStop(1, 'transparent');
+              
+              this.ctx.save();
+              this.ctx.globalCompositeOperation = 'lighter';
+              this.ctx.fillStyle = flameGrad;
+              this.ctx.shadowBlur = 25;
+              this.ctx.shadowColor = '#ff6600';
+              this.ctx.beginPath();
+              this.ctx.arc(x, y + Math.sin(time * 10 + shift) * 4, size * flamePulse, 0, Math.PI * 2);
+              this.ctx.fill();
+              this.ctx.restore();
+          };
+          
+          // Multiple flames
+          drawFlame(-20, -50, 14, 0);
+          drawFlame(20, -50, 14, 1);
+          drawFlame(-25, 0, 11, 2);
+          drawFlame(25, 0, 11, 3);
+          drawFlame(-20, 50, 16, 4);
+          drawFlame(20, 50, 16, 5);
+          drawFlame(0, 50, 18, 6);
+          
+          // Fire wings
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          
+          // Left fire wing
+          const leftWingGrad = this.ctx.createLinearGradient(-25, -15, -60 + wingFlex, -25);
+          leftWingGrad.addColorStop(0, 'rgba(255, 120, 0, 0.9)');
+          leftWingGrad.addColorStop(0.6, 'rgba(255, 200, 0, 0.5)');
+          leftWingGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = leftWingGrad;
+          this.ctx.shadowBlur = 35;
+          this.ctx.shadowColor = '#ff6600';
+          this.ctx.beginPath();
+          this.ctx.moveTo(-25, -15);
+          this.ctx.lineTo(-60 + wingFlex, -30);
+          this.ctx.lineTo(-55 + wingFlex, 5);
+          this.ctx.lineTo(-25, 10);
+          this.ctx.closePath();
+          this.ctx.fill();
+          
+          // Right fire wing
+          const rightWingGrad = this.ctx.createLinearGradient(25, -15, 60 - wingFlex, -25);
+          rightWingGrad.addColorStop(0, 'rgba(255, 120, 0, 0.9)');
+          rightWingGrad.addColorStop(0.6, 'rgba(255, 200, 0, 0.5)');
+          rightWingGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = rightWingGrad;
+          this.ctx.beginPath();
+          this.ctx.moveTo(25, -15);
+          this.ctx.lineTo(60 - wingFlex, -30);
+          this.ctx.lineTo(55 - wingFlex, 5);
+          this.ctx.lineTo(25, 10);
+          this.ctx.closePath();
+          this.ctx.fill();
+          
+          this.ctx.restore();
+          
+          // Engine fire
+          const engineGrad = this.ctx.createRadialGradient(0, 50, 5, 0, 50, 32);
+          engineGrad.addColorStop(0, '#ffffff');
+          engineGrad.addColorStop(0.3, '#ffff00');
+          engineGrad.addColorStop(0.6, '#ff6600');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.shadowBlur = 45;
+          this.ctx.shadowColor = '#ff6600';
+          this.ctx.beginPath();
+          this.ctx.arc(0, 50, 32 * pulse * flamePulse, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      
+      // ===== Default - Blue ship =====
+      else {
+          this.ctx.fillStyle = '#3b82f6';
+          this.ctx.strokeStyle = '#60a5fa';
+          this.ctx.lineWidth = 3;
+          this.ctx.shadowBlur = 20;
+          this.ctx.shadowColor = '#3b82f6';
+          
+          // Body
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, -50);
+          this.ctx.lineTo(15, -30);
+          this.ctx.lineTo(18, 30);
+          this.ctx.lineTo(0, 40);
+          this.ctx.lineTo(-18, 30);
+          this.ctx.lineTo(-15, -30);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Wings
+          this.ctx.fillStyle = '#1e3a8a';
+          
+          this.ctx.beginPath();
+          this.ctx.moveTo(-15, -10);
+          this.ctx.lineTo(-60 + wingFlex, -20);
+          this.ctx.lineTo(-55 + wingFlex, 10);
+          this.ctx.lineTo(-18, 15);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          this.ctx.beginPath();
+          this.ctx.moveTo(15, -10);
+          this.ctx.lineTo(60 - wingFlex, -20);
+          this.ctx.lineTo(55 - wingFlex, 10);
+          this.ctx.lineTo(18, 15);
+          this.ctx.closePath();
+          this.ctx.fill();
+          this.ctx.stroke();
+          
+          // Engine
+          const engineGrad = this.ctx.createRadialGradient(0, 40, 5, 0, 40, 20);
+          engineGrad.addColorStop(0, '#ffffff');
+          engineGrad.addColorStop(0.5, '#60a5fa');
+          engineGrad.addColorStop(1, 'transparent');
+          this.ctx.fillStyle = engineGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(0, 40, 20 * pulse, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      
+      this.ctx.restore();
   }
+
 
   hexToRgb(hex: string): number[] {
       const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -1503,67 +2014,743 @@ export class GameEngine {
 
   renderShipWithTexture(texture: HTMLImageElement, scale: number) {
     this.ctx.save();
-    this.ctx.scale(scale, scale);
+    
+    // HIGH QUALITY RENDERING SETTINGS
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = 'high';
+    
+    // Enhanced scale for crisp visuals
+    const enhancedScale = scale * 1.8; // Larger, more visible ships
+    this.ctx.scale(enhancedScale, enhancedScale);
 
-    // Calculate texture dimensions (assuming texture is designed for the ship size)
-    const textureWidth = 80; // Adjust based on your texture size
-    const textureHeight = 60; // Adjust based on your texture size
+    // Dynamic texture dimensions based on skin
+    const skin = this.config.skin;
+    let textureWidth = 100;  // Increased base size
+    let textureHeight = 100; // Increased base size
+    
+    // Adjust dimensions per skin for optimal display
+    if (skin === 'skin_choshen') {
+      textureWidth = 90;
+      textureHeight = 90;
+    } else if (skin === 'skin_stealth') {
+      textureWidth = 110;
+      textureHeight = 70;
+    } else if (skin === 'skin_butzina') {
+      textureWidth = 95;
+      textureHeight = 110;
+    } else if (skin === 'skin_gold') {
+      textureWidth = 100;
+      textureHeight = 85;
+    } else if (skin === 'skin_torah') {
+      textureWidth = 95;
+      textureHeight = 110;
+    }
 
-    // Apply banking effects to texture rendering
-    const tiltOffset = this.player.tilt * 20;
-    this.ctx.translate(textureWidth / 2 + tiltOffset, textureHeight / 2);
+    // Apply dramatic banking effects
+    const tiltOffset = this.player.tilt * 25;
+    this.ctx.translate(0, 0);
 
-    // Apply rotation for banking effect
-    this.ctx.rotate(this.player.tilt * 1.2);
-
-    // Draw shadow if banking
-    if (Math.abs(this.player.tilt) > 0.05) {
+    // ENHANCED SHADOW with depth
+    if (Math.abs(this.player.tilt) > 0.02) {
       this.ctx.save();
-      this.ctx.translate(-tiltOffset * 0.8, 4);
-      this.ctx.globalAlpha = 0.4 + Math.abs(this.player.tilt) * 0.3;
+      this.ctx.translate(-tiltOffset * 0.5, 8);
+      this.ctx.globalAlpha = 0.5 + Math.abs(this.player.tilt) * 0.3;
       this.ctx.fillStyle = '#000000';
+      this.ctx.filter = 'blur(8px)';
       this.ctx.beginPath();
-      this.ctx.ellipse(0, 0, 35 + Math.abs(this.player.tilt) * 10, 18, 0, 0, Math.PI * 2);
+      this.ctx.ellipse(0, 0, textureWidth * 0.4 + Math.abs(this.player.tilt) * 15, 
+                       textureHeight * 0.2, 0, 0, Math.PI * 2);
       this.ctx.fill();
+      this.ctx.filter = 'none';
       this.ctx.restore();
     }
 
-    // Draw the texture
+    // Apply tilt and banking
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.3);
+
+    // PREMIUM OUTER GLOW AURA based on skin
+    const glowColors: { [key: string]: string } = {
+      'skin_choshen': '#fbbf24',    // Gold glow for Choshen
+      'skin_stealth': '#64748b',     // Gray glow for Stealth
+      'skin_butzina': '#a855f7',     // Purple glow for Butzina
+      'skin_gold': '#fbbf24',        // Golden glow
+      'skin_torah': '#f97316',       // Fire orange glow for Torah
+      'skin_default': '#3b82f6'
+    };
+    
+    const glowColor = glowColors[skin] || '#3b82f6';
+    const time = this.gameFrame * 0.02;
+    const pulse = Math.sin(time * 2) * 0.3 + 0.7;
+    
+    // Multi-layer glow for premium look
+    for (let i = 3; i > 0; i--) {
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = (0.15 * pulse) / i;
+      this.ctx.shadowBlur = 30 * i;
+      this.ctx.shadowColor = glowColor;
+      this.ctx.drawImage(texture, -textureWidth / 2, -textureHeight / 2, textureWidth, textureHeight);
+      this.ctx.restore();
+    }
+
+    // MAIN SHIP TEXTURE - Crystal clear
+    this.ctx.save();
     this.ctx.globalAlpha = 1.0;
     this.ctx.drawImage(texture, -textureWidth / 2, -textureHeight / 2, textureWidth, textureHeight);
+    this.ctx.restore();
 
-    // Add glow effect for special weapons
-    if (this.weaponType !== 'normal') {
+    // ENHANCED GLOW for special weapons/states
+    if (this.weaponType !== 'normal' || this.shieldStrength > 0) {
+      this.ctx.save();
       this.ctx.globalCompositeOperation = 'lighter';
-      this.ctx.globalAlpha = 0.3;
+      this.ctx.globalAlpha = 0.25 * pulse;
+      this.ctx.shadowBlur = 40;
+      this.ctx.shadowColor = glowColor;
       this.ctx.drawImage(texture, -textureWidth / 2, -textureHeight / 2, textureWidth, textureHeight);
-      this.ctx.globalCompositeOperation = 'source-over';
-      this.ctx.globalAlpha = 1.0;
+      this.ctx.restore();
     }
+
+    // SPECIAL EFFECTS per skin
+    if (skin === 'skin_torah') {
+      // Animated fire particles for Torah skin
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 3; i++) {
+        const angle = (time * 3 + i * (Math.PI * 2 / 3)) % (Math.PI * 2);
+        const dist = 40 + Math.sin(time * 4 + i) * 8;
+        const x = Math.cos(angle) * dist;
+        const y = Math.sin(angle) * dist;
+        
+        const flameGrad = this.ctx.createRadialGradient(x, y, 0, x, y, 12);
+        flameGrad.addColorStop(0, 'rgba(255, 200, 0, 0.8)');
+        flameGrad.addColorStop(0.5, 'rgba(255, 100, 0, 0.5)');
+        flameGrad.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        
+        this.ctx.fillStyle = flameGrad;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, 12, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+      this.ctx.restore();
+    } else if (skin === 'skin_butzina') {
+      // Purple mystical aura for Butzina
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      const auraGrad = this.ctx.createRadialGradient(0, 0, 30, 0, 0, 60);
+      auraGrad.addColorStop(0, 'rgba(168, 85, 247, 0.4)');
+      auraGrad.addColorStop(0.5, 'rgba(192, 132, 252, 0.2)');
+      auraGrad.addColorStop(1, 'rgba(168, 85, 247, 0)');
+      this.ctx.fillStyle = auraGrad;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 0, 60 * pulse, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.restore();
+    } else if (skin === 'skin_choshen') {
+      // Rainbow sparkles for Choshen
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+      for (let i = 0; i < 6; i++) {
+        const angle = (time * 2 + i * (Math.PI * 2 / 6)) % (Math.PI * 2);
+        const dist = 45;
+        const x = Math.cos(angle) * dist;
+        const y = Math.sin(angle) * dist;
+        
+        this.ctx.fillStyle = colors[i];
+        this.ctx.globalAlpha = 0.6 * pulse;
+        this.ctx.shadowBlur = 15;
+        this.ctx.shadowColor = colors[i];
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, 3, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
+      this.ctx.restore();
+    } else if (skin === 'skin_gold') {
+      // Divine golden rays for Gold skin
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.strokeStyle = 'rgba(251, 191, 36, 0.3)';
+      this.ctx.lineWidth = 2;
+      this.ctx.shadowBlur = 20;
+      this.ctx.shadowColor = '#fbbf24';
+      for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, 0);
+        this.ctx.lineTo(Math.cos(angle) * 50, Math.sin(angle) * 50);
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
+    // ENGINE GLOW EFFECT
+    const engineGlow = this.ctx.createRadialGradient(0, 45, 0, 0, 45, 25);
+    engineGlow.addColorStop(0, `${glowColor}80`);
+    engineGlow.addColorStop(0.5, `${glowColor}40`);
+    engineGlow.addColorStop(1, 'transparent');
+    
+    this.ctx.save();
+    this.ctx.globalCompositeOperation = 'lighter';
+    this.ctx.fillStyle = engineGlow;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 45, 25 * pulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.restore();
 
     this.ctx.restore();
   }
 
   renderShipVector(skin: string, isMobile: boolean, isHighRes: boolean, scale: number, time: number, pulse: number) {
-    // Define futuristic color schemes for each skin
-    let primary = '#00ffff', secondary = '#0088aa', accent = '#ff00ff', engine = '#00aaff', metallic = '#e0e0ff', glow = '#00ffff';
-    if (skin === 'skin_default') {
-        primary = '#3b82f6'; secondary = '#1e3a8a'; accent = '#60a5fa'; engine = '#0ea5e9'; metallic = '#cbd5e1'; glow = '#3b82f6';
-    } else if (skin === 'skin_gold') {
-        primary = '#fbbf24'; secondary = '#92400e'; accent = '#f59e0b'; engine = '#eab308'; metallic = '#fef3c7'; glow = '#fbbf24';
+    // Enhanced scale for MUCH larger ships
+    const enhancedScale = scale * 2.5; // Make ships significantly larger!
+    
+    // Render specific ship based on skin
+    if (skin === 'skin_choshen') {
+        this.renderChoshenShip(enhancedScale, time, pulse);
+        return;
     } else if (skin === 'skin_stealth') {
-        primary = '#334155'; secondary = '#1e293b'; accent = '#64748b'; engine = '#475569'; metallic = '#94a3b8'; glow = '#64748b';
+        this.renderStealthShip(enhancedScale, time, pulse);
+        return;
     } else if (skin === 'skin_butzina') {
-        primary = '#a855f7'; secondary = '#6b21a8'; accent = '#c084fc'; engine = '#8b5cf6'; metallic = '#d8b4fe'; glow = '#a855f7';
+        this.renderButzinaShip(enhancedScale, time, pulse);
+        return;
+    } else if (skin === 'skin_gold') {
+        this.renderGoldShip(enhancedScale, time, pulse);
+        return;
+    } else if (skin === 'skin_torah') {
+        this.renderTorahShip(enhancedScale, time, pulse);
+        return;
     }
+    
+    // Default ship
+    this.renderDefaultShip(enhancedScale, time, pulse);
+  }
+
+  // חושן המשפט - Ship with colorful gemstone grid
+  renderChoshenShip(scale: number, time: number, pulse: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+    
+    // Apply DRAMATIC tilt and banking
+    const tiltOffset = this.player.tilt * 35;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.5);
+    
+    // Wing motion effect
+    const wingFlex = Math.sin(time * 3) * 3 * Math.abs(this.player.tilt);
+    
+    // Main body - golden frame
+    this.ctx.fillStyle = '#b8860b';
+    this.ctx.strokeStyle = '#ffd700';
+    this.ctx.lineWidth = 3;
+    this.ctx.shadowBlur = 20;
+    this.ctx.shadowColor = '#ffd700';
+    
+    // Central square body
+    this.ctx.beginPath();
+    this.ctx.rect(-35, -35, 70, 70);
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Choshen gemstone grid (4x3 colorful gems)
+    const gemColors = [
+        ['#ff0000', '#00ff00', '#0000ff', '#ffff00'],
+        ['#ff00ff', '#00ffff', '#ff8800', '#8800ff'],
+        ['#ff0080', '#00ff80', '#0080ff', '#ff8000']
+    ];
+    
+    const gemSize = 12;
+    const spacing = 18;
+    const startX = -27;
+    const startY = -27;
+    
+    for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 4; col++) {
+            const x = startX + col * spacing;
+            const y = startY + row * spacing;
+            const gemPulse = Math.sin(time * 4 + row + col) * 0.2 + 0.8;
+            
+            const grad = this.ctx.createRadialGradient(x, y, 0, x, y, gemSize/2);
+            grad.addColorStop(0, '#ffffff');
+            grad.addColorStop(0.3, gemColors[row][col]);
+            grad.addColorStop(1, '#000000');
+            
+            this.ctx.fillStyle = grad;
+            this.ctx.shadowBlur = 15 * gemPulse;
+            this.ctx.shadowColor = gemColors[row][col];
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, gemSize/2 * gemPulse, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+    }
+    
+    // Wings with tilt effect
+    this.ctx.shadowBlur = 15;
+    this.ctx.shadowColor = '#ffd700';
+    this.ctx.fillStyle = '#daa520';
+    this.ctx.strokeStyle = '#ffd700';
+    this.ctx.lineWidth = 2;
+    
+    // Left wing
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.5);
+    this.ctx.beginPath();
+    this.ctx.moveTo(-35, -10);
+    this.ctx.lineTo(-75 + wingFlex, -30);
+    this.ctx.lineTo(-70 + wingFlex, 0);
+    this.ctx.lineTo(-35, 10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Right wing
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.5);
+    this.ctx.beginPath();
+    this.ctx.moveTo(35, -10);
+    this.ctx.lineTo(75 - wingFlex, -30);
+    this.ctx.lineTo(70 - wingFlex, 0);
+    this.ctx.lineTo(35, 10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Engine glow
+    const engineGrad = this.ctx.createRadialGradient(0, 40, 5, 0, 40, 20);
+    engineGrad.addColorStop(0, '#ffffff');
+    engineGrad.addColorStop(0.5, '#ffd700');
+    engineGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = engineGrad;
+    this.ctx.shadowBlur = 30;
+    this.ctx.shadowColor = '#ffd700';
+    this.ctx.beginPath();
+    this.ctx.arc(0, 40, 20 * pulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    this.ctx.restore();
+  }
+
+  // Stealth - Sharp angular gray ship
+  renderStealthShip(scale: number, time: number, pulse: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+    
+    // Apply DRAMATIC tilt
+    const tiltOffset = this.player.tilt * 40;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.6);
+    
+    // Wing sweep effect
+    const wingFlex = this.player.tilt * 20;
+    
+    // Main body - sharp angular design
+    this.ctx.fillStyle = '#475569';
+    this.ctx.strokeStyle = '#64748b';
+    this.ctx.lineWidth = 2;
+    this.ctx.shadowBlur = 10;
+    this.ctx.shadowColor = '#334155';
+    
+    // Central body - sharp triangle
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, -60);
+    this.ctx.lineTo(25, -20);
+    this.ctx.lineTo(15, 40);
+    this.ctx.lineTo(-15, 40);
+    this.ctx.lineTo(-25, -20);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Swept back wings
+    this.ctx.fillStyle = '#334155';
+    this.ctx.strokeStyle = '#475569';
+    
+    // Left wing with flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.4);
+    this.ctx.beginPath();
+    this.ctx.moveTo(-25, -20);
+    this.ctx.lineTo(-90 + wingFlex, -10);
+    this.ctx.lineTo(-80 + wingFlex, 10);
+    this.ctx.lineTo(-15, 20);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Right wing with flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.4);
+    this.ctx.beginPath();
+    this.ctx.moveTo(25, -20);
+    this.ctx.lineTo(90 - wingFlex, -10);
+    this.ctx.lineTo(80 - wingFlex, 10);
+    this.ctx.lineTo(15, 20);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Cockpit
+    this.ctx.fillStyle = '#1e293b';
+    this.ctx.shadowBlur = 0;
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, -50);
+    this.ctx.lineTo(10, -30);
+    this.ctx.lineTo(-10, -30);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Engine glow - subtle
+    const engineGrad = this.ctx.createRadialGradient(0, 45, 5, 0, 45, 15);
+    engineGrad.addColorStop(0, '#94a3b8');
+    engineGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = engineGrad;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 45, 15 * pulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    this.ctx.restore();
+  }
+
+  // בוצינא קדישא - Purple mystical ship
+  renderButzinaShip(scale: number, time: number, pulse: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+    
+    // Apply DRAMATIC tilt
+    const tiltOffset = this.player.tilt * 38;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.7);
+    
+    // Mystical pulsing
+    const mysticPulse = Math.sin(time * 2) * 0.15 + 0.85;
+    const wingFlex = Math.sin(time * 3) * 5 + this.player.tilt * 25;
+    
+    // Main body - sharp mystical shape
+    this.ctx.fillStyle = '#7c3aed';
+    this.ctx.strokeStyle = '#a855f7';
+    this.ctx.lineWidth = 3;
+    this.ctx.shadowBlur = 25 * mysticPulse;
+    this.ctx.shadowColor = '#a855f7';
+    
+    // Central elongated body
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, -70);
+    this.ctx.lineTo(12, -50);
+    this.ctx.lineTo(18, -10);
+    this.ctx.lineTo(12, 50);
+    this.ctx.lineTo(0, 60);
+    this.ctx.lineTo(-12, 50);
+    this.ctx.lineTo(-18, -10);
+    this.ctx.lineTo(-12, -50);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Swept wings
+    this.ctx.fillStyle = '#6b21a8';
+    this.ctx.strokeStyle = '#c084fc';
+    
+    // Left wing with dramatic flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.6);
+    this.ctx.beginPath();
+    this.ctx.moveTo(-18, -30);
+    this.ctx.lineTo(-85 + wingFlex, -45);
+    this.ctx.lineTo(-75 + wingFlex, -10);
+    this.ctx.lineTo(-18, 0);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Right wing with dramatic flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.6);
+    this.ctx.beginPath();
+    this.ctx.moveTo(18, -30);
+    this.ctx.lineTo(85 - wingFlex, -45);
+    this.ctx.lineTo(75 - wingFlex, -10);
+    this.ctx.lineTo(18, 0);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Mystical orb
+    const orbGrad = this.ctx.createRadialGradient(0, -30, 0, 0, -30, 15);
+    orbGrad.addColorStop(0, '#ffffff');
+    orbGrad.addColorStop(0.4, '#d8b4fe');
+    orbGrad.addColorStop(1, '#7c3aed');
+    this.ctx.fillStyle = orbGrad;
+    this.ctx.shadowBlur = 30 * mysticPulse;
+    this.ctx.shadowColor = '#d8b4fe';
+    this.ctx.beginPath();
+    this.ctx.arc(0, -30, 12 * mysticPulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Engine glow
+    const engineGrad = this.ctx.createRadialGradient(0, 60, 5, 0, 60, 25);
+    engineGrad.addColorStop(0, '#ffffff');
+    engineGrad.addColorStop(0.4, '#c084fc');
+    engineGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = engineGrad;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 60, 25 * pulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    this.ctx.restore();
+  }
+
+  // אור החמה - Golden divine ship
+  renderGoldShip(scale: number, time: number, pulse: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+    
+    // Apply DRAMATIC tilt
+    const tiltOffset = this.player.tilt * 42;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.8);
+    
+    // Divine glow
+    const divinePulse = Math.sin(time * 2.5) * 0.2 + 0.8;
+    const wingFlex = Math.sin(time * 2) * 6 + this.player.tilt * 30;
+    
+    // Main body - majestic golden shape
+    this.ctx.fillStyle = '#daa520';
+    this.ctx.strokeStyle = '#ffd700';
+    this.ctx.lineWidth = 4;
+    this.ctx.shadowBlur = 30 * divinePulse;
+    this.ctx.shadowColor = '#ffd700';
+    
+    // Central body
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, -65);
+    this.ctx.lineTo(20, -45);
+    this.ctx.lineTo(25, -10);
+    this.ctx.lineTo(20, 30);
+    this.ctx.lineTo(10, 50);
+    this.ctx.lineTo(-10, 50);
+    this.ctx.lineTo(-20, 30);
+    this.ctx.lineTo(-25, -10);
+    this.ctx.lineTo(-20, -45);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Large majestic wings
+    this.ctx.fillStyle = '#b8860b';
+    this.ctx.strokeStyle = '#ffd700';
+    this.ctx.lineWidth = 3;
+    
+    // Left wing with flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.7);
+    this.ctx.beginPath();
+    this.ctx.moveTo(-25, -20);
+    this.ctx.lineTo(-95 + wingFlex, -40);
+    this.ctx.lineTo(-90 + wingFlex, -5);
+    this.ctx.lineTo(-20, 20);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Right wing with flex
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.7);
+    this.ctx.beginPath();
+    this.ctx.moveTo(25, -20);
+    this.ctx.lineTo(95 - wingFlex, -40);
+    this.ctx.lineTo(90 - wingFlex, -5);
+    this.ctx.lineTo(20, 20);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
+    
+    // Divine rays
+    this.ctx.strokeStyle = 'rgba(255, 215, 0, 0.4)';
+    this.ctx.lineWidth = 2;
+    this.ctx.shadowBlur = 20;
+    for (let i = 0; i < 8; i++) {
+        const angle = (i / 8) * Math.PI * 2 + time;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, -30);
+        this.ctx.lineTo(Math.cos(angle) * 45, -30 + Math.sin(angle) * 45);
+        this.ctx.stroke();
+    }
+    
+    // Engine glow
+    const engineGrad = this.ctx.createRadialGradient(0, 50, 5, 0, 50, 30);
+    engineGrad.addColorStop(0, '#ffffff');
+    engineGrad.addColorStop(0.4, '#ffd700');
+    engineGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = engineGrad;
+    this.ctx.beginPath();
+    this.ctx.arc(0, 50, 30 * pulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    this.ctx.restore();
+  }
+
+  // אש התורה - Torah scroll with flames
+  renderTorahShip(scale: number, time: number, pulse: number) {
+    this.ctx.save();
+    this.ctx.scale(scale, scale);
+    
+    // Apply DRAMATIC tilt
+    const tiltOffset = this.player.tilt * 36;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.55);
+    
+    // Fire animation
+    const flamePulse = Math.sin(time * 5) * 0.3 + 0.7;
+    const wingFlex = this.player.tilt * 28;
+    
+    // Torah scroll body
+    this.ctx.fillStyle = '#f5e6d3';
+    this.ctx.strokeStyle = '#8b4513';
+    this.ctx.lineWidth = 3;
+    this.ctx.shadowBlur = 15;
+    this.ctx.shadowColor = '#ff6600';
+    
+    // Main scroll
+    this.ctx.beginPath();
+    this.ctx.roundRect(-30, -50, 60, 100, 5);
+    this.ctx.fill();
+    this.ctx.stroke();
+    
+    // Wooden handles
+    this.ctx.fillStyle = '#654321';
+    this.ctx.beginPath();
+    this.ctx.rect(-35, -55, 8, 110);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.rect(27, -55, 8, 110);
+    this.ctx.fill();
+    
+    // Hebrew text simulation
+    this.ctx.strokeStyle = '#000000';
+    this.ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+        const y = -35 + i * 15;
+        this.ctx.beginPath();
+        this.ctx.moveTo(-20, y);
+        this.ctx.lineTo(20, y);
+        this.ctx.stroke();
+    }
+    
+    // Animated flames around scroll
+    const drawFlame = (x: number, y: number, size: number, hueShift: number) => {
+        const flameGrad = this.ctx.createRadialGradient(x, y, 0, x, y, size);
+        flameGrad.addColorStop(0, '#ffffff');
+        flameGrad.addColorStop(0.2, '#ffff00');
+        flameGrad.addColorStop(0.5, '#ff6600');
+        flameGrad.addColorStop(1, 'transparent');
+        
+        this.ctx.fillStyle = flameGrad;
+        this.ctx.globalCompositeOperation = 'lighter';
+        this.ctx.shadowBlur = 20;
+        this.ctx.shadowColor = '#ff6600';
+        this.ctx.beginPath();
+        this.ctx.arc(x, y + Math.sin(time * 8 + hueShift) * 3, size * flamePulse, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.globalCompositeOperation = 'source-over';
+    };
+    
+    // Multiple flames
+    drawFlame(-25, -55, 15, 0);
+    drawFlame(25, -55, 15, 1);
+    drawFlame(-30, 0, 12, 2);
+    drawFlame(30, 0, 12, 3);
+    drawFlame(-25, 55, 18, 4);
+    drawFlame(25, 55, 18, 5);
+    drawFlame(0, 55, 20, 6);
+    
+    // Fire wings
+    this.ctx.globalCompositeOperation = 'lighter';
+    
+    // Left fire wing
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.5);
+    const leftWingGrad = this.ctx.createLinearGradient(-30, -20, -70 + wingFlex, -30);
+    leftWingGrad.addColorStop(0, 'rgba(255, 100, 0, 0.8)');
+    leftWingGrad.addColorStop(0.5, 'rgba(255, 200, 0, 0.5)');
+    leftWingGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = leftWingGrad;
+    this.ctx.shadowBlur = 30;
+    this.ctx.shadowColor = '#ff6600';
+    this.ctx.beginPath();
+    this.ctx.moveTo(-30, -20);
+    this.ctx.lineTo(-70 + wingFlex, -35);
+    this.ctx.lineTo(-65 + wingFlex, 0);
+    this.ctx.lineTo(-30, 10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+    
+    // Right fire wing
+    this.ctx.save();
+    this.ctx.rotate(this.player.tilt * 0.5);
+    const rightWingGrad = this.ctx.createLinearGradient(30, -20, 70 - wingFlex, -30);
+    rightWingGrad.addColorStop(0, 'rgba(255, 100, 0, 0.8)');
+    rightWingGrad.addColorStop(0.5, 'rgba(255, 200, 0, 0.5)');
+    rightWingGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = rightWingGrad;
+    this.ctx.shadowBlur = 30;
+    this.ctx.shadowColor = '#ff6600';
+    this.ctx.beginPath();
+    this.ctx.moveTo(30, -20);
+    this.ctx.lineTo(70 - wingFlex, -35);
+    this.ctx.lineTo(65 - wingFlex, 0);
+    this.ctx.lineTo(30, 10);
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.restore();
+    
+    this.ctx.globalCompositeOperation = 'source-over';
+    
+    // Engine fire
+    const engineGrad = this.ctx.createRadialGradient(0, 55, 5, 0, 55, 35);
+    engineGrad.addColorStop(0, '#ffffff');
+    engineGrad.addColorStop(0.3, '#ffff00');
+    engineGrad.addColorStop(0.6, '#ff6600');
+    engineGrad.addColorStop(1, 'transparent');
+    this.ctx.fillStyle = engineGrad;
+    this.ctx.shadowBlur = 40;
+    this.ctx.shadowColor = '#ff6600';
+    this.ctx.beginPath();
+    this.ctx.arc(0, 55, 35 * pulse * flamePulse, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    this.ctx.restore();
+  }
+
+  // Default ship (original design)
+  renderDefaultShip(scale: number, time: number, pulse: number) {
+    // Define futuristic color schemes for default skin
+    let primary = '#3b82f6', secondary = '#1e3a8a', accent = '#60a5fa', engine = '#0ea5e9', metallic = '#cbd5e1', glow = '#3b82f6';
+    const isHighRes = this.width > 1200;
 
     this.ctx.save();
+    
+    // Apply DRAMATIC tilt
+    const tiltOffset = this.player.tilt * 35;
+    const wingFlex = this.player.tilt * 25;
+    this.ctx.translate(tiltOffset, 0);
+    this.ctx.rotate(this.player.tilt * 1.5);
+    
     this.ctx.scale(scale, scale);
 
     // Cache gradients to avoid recreating them every frame
-    if (!this.shipGradients || this.shipGradients.skin !== skin) {
+    if (!this.shipGradients || this.shipGradients.skin !== 'skin_default') {
         this.shipGradients = {
-            skin: skin,
+            skin: 'skin_default',
             hull: this.ctx.createLinearGradient(-35, -60, 35, 40),
             reflection: this.ctx.createLinearGradient(-20, -50, 20, -20),
             canopy: this.ctx.createLinearGradient(0, -45, 0, -25),
@@ -1812,16 +2999,17 @@ export class GameEngine {
       this.ctx.globalAlpha = 1;
     }
 
-    // === REDUCED ENERGY PULSE ===
-    // Skip on high-res for performance
-    if (!isHighRes && this.gameFrame % 5 === 0) { // Skip on high-res, every 5th frame on low-res
-        this.ctx.globalCompositeOperation = 'lighter';
-        this.ctx.fillStyle = this.shipGradients.pulse;
-        this.ctx.beginPath();
-        this.ctx.ellipse(0, -20, 50, 35, 0, 0, Math.PI*2); // Smaller pulse
-        this.ctx.fill();
-        this.ctx.globalCompositeOperation = 'source-over';
-    }
+      // === REDUCED ENERGY PULSE ===
+      // Skip on high-res for performance
+      if (!isHighRes && this.gameFrame % 5 === 0) { // Skip on high-res, every 5th frame on low-res
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.fillStyle = this.shipGradients.pulse;
+          this.ctx.beginPath();
+          this.ctx.ellipse(0, -20, 50, 35, 0, 0, Math.PI*2); // Smaller pulse
+          this.ctx.fill();
+          this.ctx.globalCompositeOperation = 'source-over';
+      }
 
-    this.ctx.restore();
+      this.ctx.restore();
   }
+}

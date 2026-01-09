@@ -11,6 +11,12 @@ export interface GameConfig {
   modifier?: SugiaModifier;
   sugiaTitle?: string;
   customDictionary?: Word[];
+  /**
+   * True only for teacher practice sessions (e.g. via teacher link).
+   * Note: `customDictionary` may also be used for dynamic words / filtering,
+   * so it must NOT be treated as "teacher mode" by itself.
+   */
+  isTeacherPractice?: boolean;
 }
 
 class Particle {
@@ -41,6 +47,33 @@ class PoolableEnemy {
     baseX = 0; waveOffset = 0;
 }
 
+type BossId = 'tannina' | 'koy' | 'shed' | 'ashmedai' | 'agirat' | 'leviathan' | 'ziz';
+
+const BOSS_SEQUENCE: BossId[] = ['tannina', 'koy', 'shed', 'ashmedai', 'agirat', 'leviathan', 'ziz'];
+
+const BOSS_NAMES: Record<BossId, string> = {
+    tannina: 'תנינא',
+    koy: 'כוי',
+    shed: 'שד',
+    ashmedai: 'אשמדאי',
+    agirat: 'אגירת',
+    leviathan: 'לויתן',
+    ziz: 'זיז שדי'
+};
+
+type BossProjectile = {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    owner: BossId;
+    radius?: number;
+    spin?: number;
+    variant?: string;
+    tick?: number;
+    seed?: number;
+};
+
 export class GameEngine {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
@@ -55,8 +88,29 @@ export class GameEngine {
   projectilePool: PoolableProjectile[] = Array.from({length: 120}, () => new PoolableProjectile());
   particlePool: Particle[] = Array.from({length: 500}, () => new Particle());
   jetParticles: {x: number, y: number, vx: number, vy: number, alpha: number, size: number, life: number}[] = [];
+  lastJetSpawnFrame: number = 0;
+
+  // --- Ship texture system (5 skins) ---
+  shipTextures: Record<string, HTMLImageElement | null> = {};
+  shipTextureStatus: Record<string, 'idle' | 'loading' | 'loaded' | 'error'> = {};
+  shipEnhancedTextures: Record<string, HTMLCanvasElement | null> = {};
+  shipEngineGlowSprites: Record<string, HTMLCanvasElement | null> = {};
+  shipAuraSprites: Record<string, HTMLCanvasElement | null> = {};
+  bossAuraSprites: Partial<Record<BossId, HTMLCanvasElement>> = {};
+
+  // --- Boss texture system (optional user-provided images in public/bosses) ---
+  bossTextures: Partial<Record<BossId, HTMLImageElement | null>> = {};
+  bossTextureStatus: Partial<Record<BossId, 'idle' | 'loading' | 'loaded' | 'error'>> = {};
+  bossSprites: Partial<Record<BossId, HTMLCanvasElement | null>> = {};
   
-  bossProjectiles: any[] = [];
+  // --- Boss cycle: after defeating Ziz, loop bosses from the start with stronger stats ---
+  bossCycleMode: boolean = false;
+  bossSequenceIndex: number = 0; // next boss in BOSS_SEQUENCE (when bossCycleMode=true)
+  bossLoop: number = 0; // 0 = before loop; 1+ = loop difficulty
+
+  bossProjectiles: BossProjectile[] = [];
+  bossProjectileSprites: Partial<Record<BossId, HTMLCanvasElement>> = {};
+  maxBossProjectiles: number = 220;
   bonuses: any[] = [];
   hazards: any[] = [];
   boss: any = null;
@@ -131,7 +185,1610 @@ export class GameEngine {
     this.currentDeck = [...this.activeDictionary];
 
     this.initParallax();
+    this.loadShipTextures();
+    this.loadBossTextures();
     this.startRound();
+  }
+
+  private assetUrl(path: string): string {
+    const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+    const base = rawBase.replace(/\/$/, ''); // remove trailing slash for consistent joins
+    const cleaned = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${cleaned}`;
+  }
+
+  private hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+    const raw = hex.trim().replace('#', '');
+    if (raw.length === 3) {
+      const r = parseInt(raw[0] + raw[0], 16);
+      const g = parseInt(raw[1] + raw[1], 16);
+      const b = parseInt(raw[2] + raw[2], 16);
+      return { r, g, b };
+    }
+    if (raw.length === 6) {
+      const r = parseInt(raw.slice(0, 2), 16);
+      const g = parseInt(raw.slice(2, 4), 16);
+      const b = parseInt(raw.slice(4, 6), 16);
+      return { r, g, b };
+    }
+    return null;
+  }
+
+  private buildEngineGlowSprite(color: string): HTMLCanvasElement {
+    const size = 96;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    const rgb = this.hexToRgb(color) || { r: 255, g: 255, b: 255 };
+    const cx = size / 2;
+    const cy = size / 2;
+    const r = size / 2;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    g.addColorStop(0.35, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.35)`);
+    g.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    return c;
+  }
+
+  private buildAuraSprite(color: string): HTMLCanvasElement {
+    const size = 256;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    const rgb = this.hexToRgb(color) || { r: 96, g: 165, b: 250 };
+    const cx = size / 2;
+    const cy = size / 2;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    // Soft ring base
+    const ringOuter = size * 0.48;
+    const ringInner = size * 0.30;
+    const ring = ctx.createRadialGradient(cx, cy, ringInner, cx, cy, ringOuter);
+    ring.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    ring.addColorStop(0.35, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.08)`);
+    ring.addColorStop(0.7, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.22)`);
+    ring.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    ctx.fillStyle = ring;
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringOuter, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Streaks (so rotation is visible)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
+      const r1 = ringInner + 8 + Math.random() * 18;
+      const r2 = ringOuter - 6 - Math.random() * 10;
+      const x1 = cx + Math.cos(a) * r1;
+      const y1 = cy + Math.sin(a) * r1;
+      const x2 = cx + Math.cos(a) * r2;
+      const y2 = cy + Math.sin(a) * r2;
+      ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${0.08 + Math.random() * 0.10})`;
+      ctx.lineWidth = 1 + Math.random() * 2.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Small sparkles
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = ringInner + Math.random() * (ringOuter - ringInner);
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${0.04 + Math.random() * 0.10})`;
+      ctx.beginPath();
+      ctx.arc(x, y, 0.6 + Math.random() * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildGoldShipSprite(): HTMLCanvasElement {
+    // Procedural, high-quality golden ship built in-code (no external image)
+    const h = 420;
+    const w = 340;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    ctx.translate(w / 2, h / 2);
+
+    // Colors
+    const goldBright = '#fff3c4';
+    const goldMain = '#fbbf24';
+    const goldMid = '#d97706';
+    const goldDark = '#78350f';
+    const line = 'rgba(255,255,255,0.18)';
+
+    // ===== Hull =====
+    const hull = new Path2D();
+    hull.moveTo(0, -170);
+    hull.bezierCurveTo(44, -135, 62, -55, 52, 75);
+    hull.quadraticCurveTo(0, 175, -52, 75);
+    hull.bezierCurveTo(-62, -55, -44, -135, 0, -170);
+    hull.closePath();
+
+    const hullG = ctx.createLinearGradient(0, -170, 0, 175);
+    hullG.addColorStop(0, goldBright);
+    hullG.addColorStop(0.18, goldMain);
+    hullG.addColorStop(0.55, goldMid);
+    hullG.addColorStop(1, goldDark);
+    ctx.fillStyle = hullG;
+    ctx.fill(hull);
+
+    // Side shading (masked to hull alpha)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    const side = ctx.createLinearGradient(-120, 0, 120, 0);
+    side.addColorStop(0, 'rgba(0,0,0,0.32)');
+    side.addColorStop(0.28, 'rgba(0,0,0,0.00)');
+    side.addColorStop(0.72, 'rgba(0,0,0,0.00)');
+    side.addColorStop(1, 'rgba(0,0,0,0.32)');
+    ctx.fillStyle = side;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    // Rim highlight
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.lineWidth = 3;
+    ctx.stroke(hull);
+
+    // ===== Wings (mirror) =====
+    const wing = new Path2D();
+    wing.moveTo(-44, -35);
+    wing.lineTo(-165, 35);
+    wing.quadraticCurveTo(-135, 82, -82, 98);
+    wing.lineTo(-52, 70);
+    wing.quadraticCurveTo(-70, 30, -44, -35);
+    wing.closePath();
+
+    const wingG = ctx.createLinearGradient(-170, -20, -40, 110);
+    wingG.addColorStop(0, goldDark);
+    wingG.addColorStop(0.35, goldMid);
+    wingG.addColorStop(1, goldMain);
+
+    const drawWing = () => {
+      ctx.fillStyle = wingG;
+      ctx.fill(wing);
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 2;
+      ctx.stroke(wing);
+
+      // Panel line
+      ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-120, 55);
+      ctx.lineTo(-55, 20);
+      ctx.stroke();
+
+      // Neon trim (very subtle)
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.25;
+      ctx.strokeStyle = 'rgba(255, 240, 200, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-150, 40);
+      ctx.lineTo(-80, 85);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    drawWing();
+    ctx.save();
+    ctx.scale(-1, 1);
+    drawWing();
+    ctx.restore();
+
+    // ===== Canopy (glass) =====
+    const canopy = new Path2D();
+    canopy.moveTo(0, -120);
+    canopy.bezierCurveTo(22, -108, 22, -70, 0, -56);
+    canopy.bezierCurveTo(-22, -70, -22, -108, 0, -120);
+    canopy.closePath();
+    const glass = ctx.createLinearGradient(0, -120, 0, -52);
+    glass.addColorStop(0, 'rgba(56, 189, 248, 0.65)');
+    glass.addColorStop(0.5, 'rgba(14, 116, 144, 0.55)');
+    glass.addColorStop(1, 'rgba(2, 132, 199, 0.18)');
+    ctx.fillStyle = glass;
+    ctx.fill(canopy);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.stroke(canopy);
+
+    // Glass highlight
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.ellipse(-6, -95, 8, 18, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ===== Nose emitter (fits beam weapon) =====
+    const emitterY = -155;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const emit = ctx.createRadialGradient(0, emitterY, 0, 0, emitterY, 28);
+    emit.addColorStop(0, 'rgba(255,255,255,0.95)');
+    emit.addColorStop(0.2, 'rgba(255,240,180,0.8)');
+    emit.addColorStop(0.55, 'rgba(251,191,36,0.35)');
+    emit.addColorStop(1, 'rgba(251,191,36,0)');
+    ctx.fillStyle = emit;
+    ctx.beginPath();
+    ctx.arc(0, emitterY, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Emitter lens ring
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, emitterY, 10, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // ===== Engine pods =====
+    const engineY = 120;
+    const engine = (x: number) => {
+      const shell = ctx.createLinearGradient(x, engineY - 24, x, engineY + 26);
+      shell.addColorStop(0, goldDark);
+      shell.addColorStop(0.4, goldMid);
+      shell.addColorStop(1, goldMain);
+      ctx.fillStyle = shell;
+      ctx.beginPath();
+      ctx.roundRect(x - 22, engineY - 26, 44, 58, 18);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Inner nozzle
+      const noz = ctx.createRadialGradient(x, engineY + 18, 0, x, engineY + 18, 18);
+      noz.addColorStop(0, 'rgba(255,255,255,0.95)');
+      noz.addColorStop(0.25, 'rgba(251,191,36,0.7)');
+      noz.addColorStop(1, 'rgba(251,191,36,0)');
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = noz;
+      ctx.beginPath();
+      ctx.arc(x, engineY + 18, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+    engine(-28);
+    engine(28);
+
+    // ===== Micro detail lines (masked) =====
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.strokeStyle = line;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -145);
+    ctx.lineTo(0, 120);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-26, -20);
+    ctx.lineTo(-8, 70);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(26, -20);
+    ctx.lineTo(8, 70);
+    ctx.stroke();
+    ctx.restore();
+
+    // ===== Outer rim glow (masked) =====
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.22;
+    const rim = ctx.createRadialGradient(0, -40, 40, 0, -40, 200);
+    rim.addColorStop(0, 'rgba(255,255,255,0.35)');
+    rim.addColorStop(0.6, 'rgba(255,255,255,0.06)');
+    rim.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = rim;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildDefaultShipSprite(): HTMLCanvasElement {
+    // Sleek metallic fighter with blue neon accents (procedural)
+    const h = 420;
+    const w = 340;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+    ctx.translate(w / 2, h / 2);
+
+    const steelLight = '#e2e8f0';
+    const steelMain = '#94a3b8';
+    const steelMid = '#64748b';
+    const steelDark = '#0f172a';
+    const accent = '#60a5fa';
+
+    // Hull (angular)
+    const hull = new Path2D();
+    hull.moveTo(0, -175);
+    hull.lineTo(52, -130);
+    hull.lineTo(70, -35);
+    hull.quadraticCurveTo(62, 130, 0, 175);
+    hull.quadraticCurveTo(-62, 130, -70, -35);
+    hull.lineTo(-52, -130);
+    hull.closePath();
+
+    const hullG = ctx.createLinearGradient(0, -175, 0, 175);
+    hullG.addColorStop(0, steelLight);
+    hullG.addColorStop(0.22, steelMain);
+    hullG.addColorStop(0.62, steelMid);
+    hullG.addColorStop(1, steelDark);
+    ctx.fillStyle = hullG;
+    ctx.fill(hull);
+
+    // Side shading (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    const side = ctx.createLinearGradient(-140, 0, 140, 0);
+    side.addColorStop(0, 'rgba(0,0,0,0.38)');
+    side.addColorStop(0.30, 'rgba(0,0,0,0)');
+    side.addColorStop(0.70, 'rgba(0,0,0,0)');
+    side.addColorStop(1, 'rgba(0,0,0,0.38)');
+    ctx.fillStyle = side;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 3;
+    ctx.stroke(hull);
+
+    // Wings (delta)
+    const wing = new Path2D();
+    wing.moveTo(-42, -22);
+    wing.lineTo(-178, 58);
+    wing.quadraticCurveTo(-150, 112, -92, 128);
+    wing.lineTo(-52, 74);
+    wing.quadraticCurveTo(-70, 28, -42, -22);
+    wing.closePath();
+
+    const wingG = ctx.createLinearGradient(-190, -20, -40, 150);
+    wingG.addColorStop(0, steelDark);
+    wingG.addColorStop(0.45, steelMid);
+    wingG.addColorStop(1, steelMain);
+
+    const drawWing = () => {
+      ctx.fillStyle = wingG;
+      ctx.fill(wing);
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.lineWidth = 2;
+      ctx.stroke(wing);
+
+      // Panel lines
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-132, 66);
+      ctx.lineTo(-60, 24);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-150, 82);
+      ctx.lineTo(-84, 122);
+      ctx.stroke();
+
+      // Neon edge trim
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = 'rgba(96,165,250,0.55)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-165, 62);
+      ctx.lineTo(-88, 124);
+      ctx.stroke();
+      ctx.restore();
+
+      // Weapon pod
+      ctx.save();
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(-170, 52, 34, 18, 9);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    drawWing();
+    ctx.save();
+    ctx.scale(-1, 1);
+    drawWing();
+    ctx.restore();
+
+    // Canopy
+    const canopy = new Path2D();
+    canopy.moveTo(0, -132);
+    canopy.bezierCurveTo(22, -118, 20, -76, 0, -60);
+    canopy.bezierCurveTo(-20, -76, -22, -118, 0, -132);
+    canopy.closePath();
+    const glass = ctx.createLinearGradient(0, -140, 0, -52);
+    glass.addColorStop(0, 'rgba(125, 211, 252, 0.70)');
+    glass.addColorStop(0.55, 'rgba(14, 116, 144, 0.55)');
+    glass.addColorStop(1, 'rgba(2, 132, 199, 0.18)');
+    ctx.fillStyle = glass;
+    ctx.fill(canopy);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 2;
+    ctx.stroke(canopy);
+
+    // Intake + center spine (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -160);
+    ctx.lineTo(0, 140);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(96,165,250,0.30)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-18, -40);
+    ctx.lineTo(-6, 88);
+    ctx.moveTo(18, -40);
+    ctx.lineTo(6, 88);
+    ctx.stroke();
+    ctx.restore();
+
+    // Engine housings
+    const engineY = 125;
+    const engine = (x: number) => {
+      const shell = ctx.createLinearGradient(x, engineY - 26, x, engineY + 32);
+      shell.addColorStop(0, steelDark);
+      shell.addColorStop(0.45, steelMid);
+      shell.addColorStop(1, steelMain);
+      ctx.fillStyle = shell;
+      ctx.beginPath();
+      ctx.roundRect(x - 22, engineY - 26, 44, 62, 18);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Nozzle glow (baked lightly)
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const noz = ctx.createRadialGradient(x, engineY + 20, 0, x, engineY + 20, 18);
+      noz.addColorStop(0, 'rgba(255,255,255,0.95)');
+      noz.addColorStop(0.35, 'rgba(96,165,250,0.7)');
+      noz.addColorStop(1, 'rgba(96,165,250,0)');
+      ctx.fillStyle = noz;
+      ctx.beginPath();
+      ctx.arc(x, engineY + 20, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+    engine(-28);
+    engine(28);
+
+    // Subtle rim glow (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.18;
+    const rim = ctx.createRadialGradient(0, -40, 50, 0, -40, 210);
+    rim.addColorStop(0, 'rgba(255,255,255,0.25)');
+    rim.addColorStop(0.6, 'rgba(96,165,250,0.08)');
+    rim.addColorStop(1, 'rgba(96,165,250,0)');
+    ctx.fillStyle = rim;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    // Tiny nav lights
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(-88, 118, 3, 0, Math.PI * 2);
+    ctx.arc(88, 118, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildButzinaShipSprite(): HTMLCanvasElement {
+    // Mystical purple ship with a “holy flame” core
+    const h = 420;
+    const w = 340;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+    ctx.translate(w / 2, h / 2);
+
+    const pBright = '#f5d0fe';
+    const pMain = '#c084fc';
+    const pMid = '#a855f7';
+    const pDark = '#3b0764';
+
+    // Hull (organic/flame-like)
+    const hull = new Path2D();
+    hull.moveTo(0, -178);
+    hull.bezierCurveTo(66, -120, 82, -30, 46, 98);
+    hull.quadraticCurveTo(0, 178, -46, 98);
+    hull.bezierCurveTo(-82, -30, -66, -120, 0, -178);
+    hull.closePath();
+
+    const hullG = ctx.createLinearGradient(0, -180, 0, 180);
+    hullG.addColorStop(0, pBright);
+    hullG.addColorStop(0.20, pMain);
+    hullG.addColorStop(0.60, pMid);
+    hullG.addColorStop(1, pDark);
+    ctx.fillStyle = hullG;
+    ctx.fill(hull);
+
+    // Side shading (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    const side = ctx.createLinearGradient(-150, 0, 150, 0);
+    side.addColorStop(0, 'rgba(0,0,0,0.34)');
+    side.addColorStop(0.32, 'rgba(0,0,0,0)');
+    side.addColorStop(0.68, 'rgba(0,0,0,0)');
+    side.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = side;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 3;
+    ctx.stroke(hull);
+
+    // Wings (curved “petals”)
+    const wing = new Path2D();
+    wing.moveTo(-42, -58);
+    wing.quadraticCurveTo(-190, -10, -160, 108);
+    wing.quadraticCurveTo(-120, 144, -72, 122);
+    wing.quadraticCurveTo(-52, 48, -42, -58);
+    wing.closePath();
+
+    const wingG = ctx.createLinearGradient(-190, -60, -40, 160);
+    wingG.addColorStop(0, pDark);
+    wingG.addColorStop(0.5, pMid);
+    wingG.addColorStop(1, pMain);
+
+    const drawWing = () => {
+      ctx.fillStyle = wingG;
+      ctx.fill(wing);
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.lineWidth = 2;
+      ctx.stroke(wing);
+
+      // Rune etchings
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-atop';
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-130, 40);
+      ctx.lineTo(-76, 10);
+      ctx.moveTo(-150, 70);
+      ctx.lineTo(-92, 110);
+      ctx.stroke();
+      ctx.restore();
+
+      // Neon edge
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = 'rgba(192,132,252,0.60)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-170, 35);
+      ctx.lineTo(-120, 132);
+      ctx.stroke();
+      ctx.restore();
+    };
+    drawWing();
+    ctx.save();
+    ctx.scale(-1, 1);
+    drawWing();
+    ctx.restore();
+
+    // Core “holy flame” (glowing energy sphere)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const coreY = -25;
+    const core = ctx.createRadialGradient(0, coreY, 0, 0, coreY, 90);
+    core.addColorStop(0, 'rgba(255,255,255,0.85)');
+    core.addColorStop(0.18, 'rgba(245,208,254,0.65)');
+    core.addColorStop(0.45, 'rgba(192,132,252,0.55)');
+    core.addColorStop(1, 'rgba(168,85,247,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(0, coreY, 90, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Canopy (crystal)
+    const canopy = new Path2D();
+    canopy.moveTo(0, -132);
+    canopy.bezierCurveTo(20, -114, 20, -78, 0, -64);
+    canopy.bezierCurveTo(-20, -78, -20, -114, 0, -132);
+    canopy.closePath();
+    const glass = ctx.createLinearGradient(0, -140, 0, -58);
+    glass.addColorStop(0, 'rgba(224, 231, 255, 0.70)');
+    glass.addColorStop(0.5, 'rgba(147, 51, 234, 0.35)');
+    glass.addColorStop(1, 'rgba(30, 41, 59, 0.15)');
+    ctx.fillStyle = glass;
+    ctx.fill(canopy);
+    ctx.strokeStyle = 'rgba(255,255,255,0.20)';
+    ctx.lineWidth = 2;
+    ctx.stroke(canopy);
+
+    // Engines (purple plasma)
+    const engineY = 132;
+    const engine = (x: number) => {
+      ctx.fillStyle = pDark;
+      ctx.beginPath();
+      ctx.roundRect(x - 18, engineY - 22, 36, 54, 16);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const noz = ctx.createRadialGradient(x, engineY + 18, 0, x, engineY + 18, 20);
+      noz.addColorStop(0, 'rgba(255,255,255,0.9)');
+      noz.addColorStop(0.35, 'rgba(192,132,252,0.7)');
+      noz.addColorStop(1, 'rgba(168,85,247,0)');
+      ctx.fillStyle = noz;
+      ctx.beginPath();
+      ctx.arc(x, engineY + 18, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+    engine(-26);
+    engine(26);
+
+    // Subtle mystical sigil lines (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.16;
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1.3;
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 10, -150);
+      ctx.quadraticCurveTo(i * 20, -10, i * 8, 150);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildTorahShipSprite(): HTMLCanvasElement {
+    // Torah base sprite (scroll only). Live fire is rendered dynamically in `renderShipWithTexture`
+    // so it won't look like a static “sticker” or a clipped rectangle.
+    const w = 360;
+    const h = 440;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+    ctx.translate(w / 2, h / 2);
+
+    const goldMain = '#fbbf24';
+    const goldMid = '#d97706';
+    const goldDark = '#92400e';
+    const parchment1 = '#fff7d6';
+    const parchment2 = '#fde68a';
+    const parchment3 = '#fcd34d';
+    const ink = '#78350f';
+
+    // ===== Scroll rods (Etz Chaim) =====
+    const rod = (x: number) => {
+      // Wooden cylinder core (more like real Torah rollers)
+      const wood = ctx.createLinearGradient(x - 18, 0, x + 18, 0);
+      wood.addColorStop(0, '#2b1b10');
+      wood.addColorStop(0.2, '#7c4a1b');
+      wood.addColorStop(0.5, '#e2c28b');
+      wood.addColorStop(0.8, '#7c4a1b');
+      wood.addColorStop(1, '#2b1b10');
+
+      ctx.fillStyle = wood;
+      ctx.beginPath();
+      ctx.roundRect(x - 18, -175, 36, 350, 18);
+      ctx.fill();
+
+      // Subtle wood grain (masked)
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-atop';
+      ctx.globalAlpha = 0.14;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 9; i++) {
+        const yy = -160 + i * 40;
+        ctx.beginPath();
+        ctx.moveTo(x - 14, yy);
+        ctx.quadraticCurveTo(x, yy + 8, x + 14, yy);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Golden bands (top + bottom)
+      const band = (y: number) => {
+        const g = ctx.createLinearGradient(x, y, x, y + 44);
+        g.addColorStop(0, '#fff3c4');
+        g.addColorStop(0.35, goldMain);
+        g.addColorStop(0.75, goldMid);
+        g.addColorStop(1, goldDark);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.roundRect(x - 22, y, 44, 44, 18);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      };
+      band(-184);
+      band(140);
+
+      // Rimonim (decorations) on top
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const rim = ctx.createRadialGradient(x, -196, 0, x, -196, 26);
+      rim.addColorStop(0, 'rgba(255,255,255,0.75)');
+      rim.addColorStop(0.35, 'rgba(251,191,36,0.45)');
+      rim.addColorStop(1, 'rgba(251,191,36,0)');
+      ctx.fillStyle = rim;
+      ctx.beginPath();
+      ctx.arc(x, -196, 26, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = goldMid;
+      ctx.beginPath();
+      ctx.arc(x, -196, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.arc(x - 3, -199, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bottom handle tip
+      ctx.fillStyle = goldDark;
+      ctx.beginPath();
+      ctx.roundRect(x - 10, 186, 20, 14, 7);
+      ctx.fill();
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = '#fff3c4';
+      ctx.beginPath();
+      ctx.arc(x, 193, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+    rod(-122);
+    rod(122);
+
+    // ===== Parchment body =====
+    const bodyW = 220;
+    const bodyH = 280;
+    const parchment = new Path2D();
+    parchment.roundRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH, 18);
+
+    const pg = ctx.createLinearGradient(0, -bodyH / 2, 0, bodyH / 2);
+    pg.addColorStop(0, parchment1);
+    pg.addColorStop(0.45, parchment2);
+    pg.addColorStop(1, parchment3);
+    ctx.fillStyle = pg;
+    ctx.fill(parchment);
+    ctx.strokeStyle = 'rgba(146, 64, 14, 0.55)';
+    ctx.lineWidth = 3;
+    ctx.stroke(parchment);
+
+    // Rolled edges shading (masked) — makes it feel like a real scroll, not a flat rectangle
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.18;
+    const edgeL = ctx.createLinearGradient(-bodyW / 2, 0, -bodyW / 2 + 22, 0);
+    edgeL.addColorStop(0, 'rgba(0,0,0,0.35)');
+    edgeL.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = edgeL;
+    ctx.fillRect(-bodyW / 2, -bodyH / 2, 22, bodyH);
+    const edgeR = ctx.createLinearGradient(bodyW / 2, 0, bodyW / 2 - 22, 0);
+    edgeR.addColorStop(0, 'rgba(0,0,0,0.35)');
+    edgeR.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = edgeR;
+    ctx.fillRect(bodyW / 2 - 22, -bodyH / 2, 22, bodyH);
+    ctx.restore();
+
+    // Inner golden frame (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.26;
+    ctx.strokeStyle = goldMid;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-bodyW / 2 + 12, -bodyH / 2 + 12, bodyW - 24, bodyH - 24);
+    ctx.restore();
+
+    // “Text” columns (ink) — a bit denser for authenticity
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = ink;
+    const colX = [-48, 0, 48];
+    for (let col = 0; col < colX.length; col++) {
+      for (let i = 0; i < 18; i++) {
+        const y = -105 + i * 12;
+        const len = 28 + ((i + col) % 4) * 8;
+        ctx.fillRect(colX[col] - len / 2, y, len, 2);
+      }
+    }
+    ctx.restore();
+
+    // Crown seal at top center
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const seal = ctx.createRadialGradient(0, -170, 0, 0, -170, 42);
+    seal.addColorStop(0, 'rgba(255,255,255,0.85)');
+    seal.addColorStop(0.2, 'rgba(251,191,36,0.65)');
+    seal.addColorStop(0.55, 'rgba(249,115,22,0.28)');
+    seal.addColorStop(1, 'rgba(249,115,22,0)');
+    ctx.fillStyle = seal;
+    ctx.beginPath();
+    ctx.arc(0, -170, 42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Overall glow around the scroll (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.18;
+    const rim = ctx.createRadialGradient(0, -20, 40, 0, -20, 240);
+    rim.addColorStop(0, 'rgba(255,255,255,0.18)');
+    rim.addColorStop(0.5, 'rgba(251,191,36,0.10)');
+    rim.addColorStop(1, 'rgba(249,115,22,0)');
+    ctx.fillStyle = rim;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildChoshenShipSprite(): HTMLCanvasElement {
+    // High Priest Choshen: gold frame + 3 rows of 4 diamond-like gemstones (no spaceship body)
+    const w = 420;
+    const h = 340;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+    ctx.translate(w / 2, h / 2);
+
+    const goldMain = '#fbbf24';
+    const goldMid = '#d97706';
+    const goldDark = '#92400e';
+    const fabricDark = '#0b1226';
+    const fabricMid = '#111827';
+
+    const plateW = 330;
+    const plateH = 260;
+    const plateR = 28;
+
+    // Outer golden plate
+    const plate = new Path2D();
+    plate.roundRect(-plateW / 2, -plateH / 2, plateW, plateH, plateR);
+
+    const frameG = ctx.createLinearGradient(0, -plateH / 2, 0, plateH / 2);
+    frameG.addColorStop(0, '#fff3c4');
+    frameG.addColorStop(0.25, goldMain);
+    frameG.addColorStop(0.68, goldMid);
+    frameG.addColorStop(1, goldDark);
+    ctx.fillStyle = frameG;
+    ctx.fill(plate);
+
+    // Inner bevel
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(-plateW / 2 + 10, -plateH / 2 + 10, plateW - 20, plateH - 20);
+    ctx.restore();
+
+    // Border outline
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 3;
+    ctx.stroke(plate);
+
+    // Inner fabric panel (masked)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    const inner = new Path2D();
+    inner.roundRect(-plateW / 2 + 18, -plateH / 2 + 18, plateW - 36, plateH - 36, 22);
+    const fabricG = ctx.createLinearGradient(0, -plateH / 2, 0, plateH / 2);
+    fabricG.addColorStop(0, fabricMid);
+    fabricG.addColorStop(1, fabricDark);
+    ctx.fillStyle = fabricG;
+    ctx.fill(inner);
+    ctx.restore();
+
+    // Top loops for chains (gold rings)
+    const ring = (x: number) => {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.35;
+      const g = ctx.createRadialGradient(x, -plateH / 2 + 20, 0, x, -plateH / 2 + 20, 22);
+      g.addColorStop(0, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.35, 'rgba(251,191,36,0.35)');
+      g.addColorStop(1, 'rgba(251,191,36,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, -plateH / 2 + 20, 22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = goldMid;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(x, -plateH / 2 + 20, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, -plateH / 2 + 20, 12, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    ring(-plateW * 0.28);
+    ring(plateW * 0.28);
+
+    // Gem grid: 4 rows × 3 columns (12 stones) — like the High Priest's Choshen
+    type GemSpec =
+      | { kind: 'solid'; color: string }
+      | { kind: 'tri' }                     // red / green / white-black
+      | { kind: 'rainbow' }                 // all colors mixed
+      | { kind: 'turquoiseMix' }            // teal + turquoise blend
+      | { kind: 'crystal' }                 // white / transparent
+      | { kind: 'midnight' }                // dark blue / almost black
+      | { kind: 'oliveGold' }               // olive oil gold-green
+      | { kind: 'deepBlack' };              // deep black
+
+    const gems: GemSpec[] = [
+      // Row 1 (top)
+      { kind: 'solid', color: '#ef4444' },          // red
+      { kind: 'solid', color: '#a3e635' },          // green / yellow-green
+      { kind: 'tri' },                              // colorful: 1/3 red, 1/3 green, 1/3 white/black
+
+      // Row 2
+      { kind: 'solid', color: '#7dd3fc' },          // sky blue
+      { kind: 'midnight' },                         // night blue / black-blue
+      { kind: 'crystal' },                          // white / transparent (silver-like)
+
+      // Row 3
+      { kind: 'solid', color: '#1d4ed8' },          // sapphire deep blue
+      { kind: 'turquoiseMix' },                     // turquoise mixed
+      { kind: 'solid', color: '#a855f7' },          // purple
+
+      // Row 4 (bottom)
+      { kind: 'oliveGold' },                        // olive oil gold-green
+      { kind: 'deepBlack' },                        // deep black
+      { kind: 'rainbow' }                           // all colors mixed
+    ];
+
+    const cols = 3;
+    const rows = 4;
+    const cellX = 108;
+    const cellY = 64;
+    const startX = -((cols - 1) * cellX) / 2;
+    const startY = -((rows - 1) * cellY) / 2;
+
+    const drawDiamondGem = (x: number, y: number, s: number, spec: GemSpec, seed: number) => {
+      const diamond = new Path2D();
+      diamond.moveTo(x, y - s);
+      diamond.lineTo(x + s, y);
+      diamond.lineTo(x, y + s);
+      diamond.lineTo(x - s, y);
+      diamond.closePath();
+
+      const gemBaseColor =
+        spec.kind === 'solid' ? spec.color :
+        spec.kind === 'turquoiseMix' ? '#22d3ee' :
+        spec.kind === 'oliveGold' ? '#a3a635' :
+        spec.kind === 'midnight' ? '#1e3a8a' :
+        spec.kind === 'deepBlack' ? '#0f172a' :
+        spec.kind === 'crystal' ? '#e2e8f0' :
+        spec.kind === 'tri' ? '#ffffff' :
+        '#ffffff'; // rainbow default
+
+      // Soft shadow for depth
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill(diamond);
+      ctx.restore();
+
+      // Colored glow (makes the stone color dominant even from far away)
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.20;
+      ctx.shadowBlur = 22;
+      ctx.shadowColor = gemBaseColor;
+      ctx.fillStyle = gemBaseColor;
+      ctx.fill(diamond);
+      ctx.restore();
+
+      // Gem body fill (varies per stone)
+      ctx.save();
+      ctx.clip(diamond);
+
+      const fillSolid = (color: string) => {
+        const g = ctx.createRadialGradient(x - s * 0.28, y - s * 0.32, 2, x, y, s * 1.25);
+        g.addColorStop(0, 'rgba(255,255,255,0.95)');
+        g.addColorStop(0.22, color);
+        g.addColorStop(0.65, color);
+        g.addColorStop(1, 'rgba(0,0,0,0.85)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      };
+
+      if (spec.kind === 'solid') {
+        fillSolid(spec.color);
+      } else if (spec.kind === 'tri') {
+        // 1/3 red, 1/3 green, 1/3 white-black (striped)
+        const bandW = (s * 2) / 3;
+        ctx.fillStyle = '#ef4444';
+        ctx.fillRect(x - s - 2, y - s - 2, bandW + 2, (s + 2) * 2);
+        ctx.fillStyle = '#a3e635';
+        ctx.fillRect(x - s + bandW - 1, y - s - 2, bandW + 2, (s + 2) * 2);
+        const mono = ctx.createLinearGradient(x - s + bandW * 2, y - s, x + s, y + s);
+        mono.addColorStop(0, 'rgba(255,255,255,0.95)');
+        mono.addColorStop(0.5, 'rgba(0,0,0,0.95)');
+        mono.addColorStop(1, 'rgba(255,255,255,0.65)');
+        ctx.fillStyle = mono;
+        ctx.fillRect(x - s + bandW * 2 - 1, y - s - 2, bandW + 3, (s + 2) * 2);
+
+        // Add a glassy highlight on top
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.22;
+        const hi = ctx.createLinearGradient(x - s, y - s, x + s, y + s);
+        hi.addColorStop(0, 'rgba(255,255,255,0.75)');
+        hi.addColorStop(0.35, 'rgba(255,255,255,0.15)');
+        hi.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = hi;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      } else if (spec.kind === 'rainbow') {
+        const rG = ctx.createLinearGradient(x - s, y + s, x + s, y - s);
+        rG.addColorStop(0.00, '#ef4444');
+        rG.addColorStop(0.15, '#f97316');
+        rG.addColorStop(0.30, '#eab308');
+        rG.addColorStop(0.45, '#22c55e');
+        rG.addColorStop(0.60, '#06b6d4');
+        rG.addColorStop(0.75, '#3b82f6');
+        rG.addColorStop(0.90, '#a855f7');
+        rG.addColorStop(1.00, '#ec4899');
+        ctx.fillStyle = rG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+
+        // Prismatic “sparkle film”
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.16;
+        const film = ctx.createLinearGradient(x - s, y - s, x + s, y + s);
+        film.addColorStop(0, 'rgba(255,255,255,0)');
+        film.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+        film.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = film;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+        ctx.globalAlpha = 1;
+      } else if (spec.kind === 'turquoiseMix') {
+        const tG = ctx.createLinearGradient(x - s, y + s, x + s, y - s);
+        tG.addColorStop(0, '#14b8a6');
+        tG.addColorStop(0.35, '#22d3ee');
+        tG.addColorStop(0.7, '#0ea5e9');
+        tG.addColorStop(1, '#22c55e');
+        ctx.fillStyle = tG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.16;
+        const hi = ctx.createRadialGradient(x - s * 0.25, y - s * 0.35, 2, x, y, s * 1.25);
+        hi.addColorStop(0, 'rgba(255,255,255,0.65)');
+        hi.addColorStop(0.35, 'rgba(255,255,255,0.10)');
+        hi.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = hi;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      } else if (spec.kind === 'crystal') {
+        const cG = ctx.createRadialGradient(x - s * 0.25, y - s * 0.35, 2, x, y, s * 1.35);
+        cG.addColorStop(0, 'rgba(255,255,255,0.95)');
+        cG.addColorStop(0.18, 'rgba(241,245,249,0.70)');
+        cG.addColorStop(0.5, 'rgba(148,163,184,0.22)');
+        cG.addColorStop(1, 'rgba(148,163,184,0)');
+        ctx.fillStyle = cG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+
+        // Frost edge tint
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.14;
+        ctx.fillStyle = 'rgba(125,211,252,0.35)';
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 0.45);
+      } else if (spec.kind === 'midnight') {
+        const mG = ctx.createRadialGradient(x - s * 0.25, y - s * 0.35, 2, x, y, s * 1.35);
+        mG.addColorStop(0, 'rgba(255,255,255,0.25)');
+        mG.addColorStop(0.18, 'rgba(37,99,235,0.22)');
+        mG.addColorStop(0.55, 'rgba(15,23,42,0.95)');
+        mG.addColorStop(1, 'rgba(2,6,23,1)');
+        ctx.fillStyle = mG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      } else if (spec.kind === 'oliveGold') {
+        const oG = ctx.createLinearGradient(x - s, y + s, x + s, y - s);
+        oG.addColorStop(0, '#6b7c2a');
+        oG.addColorStop(0.35, '#a3a635');
+        oG.addColorStop(0.7, '#fbbf24');
+        oG.addColorStop(1, '#d97706');
+        ctx.fillStyle = oG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.14;
+        const hi = ctx.createLinearGradient(x - s, y - s, x + s, y + s);
+        hi.addColorStop(0, 'rgba(255,255,255,0.6)');
+        hi.addColorStop(0.4, 'rgba(255,255,255,0.10)');
+        hi.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = hi;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      } else if (spec.kind === 'deepBlack') {
+        const bG = ctx.createRadialGradient(x - s * 0.25, y - s * 0.35, 2, x, y, s * 1.35);
+        bG.addColorStop(0, 'rgba(255,255,255,0.22)');
+        bG.addColorStop(0.25, 'rgba(30,41,59,0.95)');
+        bG.addColorStop(1, 'rgba(2,6,23,1)');
+        ctx.fillStyle = bG;
+        ctx.fillRect(x - s - 2, y - s - 2, (s + 2) * 2, (s + 2) * 2);
+      }
+
+      ctx.restore();
+
+      // Facet lines (cross + diagonals)
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x, y - s);
+      ctx.lineTo(x, y + s);
+      ctx.moveTo(x - s, y);
+      ctx.lineTo(x + s, y);
+      ctx.moveTo(x - s * 0.65, y - s * 0.15);
+      ctx.lineTo(x + s * 0.15, y + s * 0.65);
+      ctx.moveTo(x - s * 0.15, y - s * 0.65);
+      ctx.lineTo(x + s * 0.65, y + s * 0.15);
+      ctx.stroke();
+      ctx.restore();
+
+      // Thin gold bezel outline (keeps gems separated without tinting them)
+      ctx.save();
+      ctx.globalAlpha = 0.40;
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2.2;
+      ctx.stroke(diamond);
+      ctx.restore();
+
+      // Tiny sparkle highlight (randomized per gem for variety)
+      const sx = x - s * (0.25 + (seed % 3) * 0.05);
+      const sy = y - s * (0.35 + (seed % 2) * 0.08);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx - 5, sy);
+      ctx.lineTo(sx + 5, sy);
+      ctx.moveTo(sx, sy - 5);
+      ctx.lineTo(sx, sy + 5);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    let gemSeed = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c2 = 0; c2 < cols; c2++) {
+        const idx = r * cols + c2;
+        const x = startX + c2 * cellX;
+        const y = startY + r * cellY;
+        const spec = gems[idx] || { kind: 'solid', color: '#fbbf24' };
+        drawDiamondGem(x, y, 24, spec, gemSeed++);
+      }
+    }
+
+    // Divine gold shimmer (masked) — keep subtle so it won't tint the gemstones
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.10;
+    const rim = ctx.createRadialGradient(0, 0, 60, 0, 0, 240);
+    rim.addColorStop(0, 'rgba(255,255,255,0.10)');
+    rim.addColorStop(0.55, 'rgba(255,255,255,0.06)');
+    rim.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = rim;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+
+    return c;
+  }
+
+  private buildEnhancedShipSprite(skin: string, img: HTMLImageElement): HTMLCanvasElement {
+    const srcW = img.naturalWidth || img.width || 1;
+    const srcH = img.naturalHeight || img.height || 1;
+    const aspect = srcW / Math.max(1, srcH);
+
+    // High-res cached sprite for crisp scaling (cheap per-frame drawImage)
+    const targetH = 384;
+    const targetW = Math.max(1, Math.round(targetH * aspect));
+
+    const c = document.createElement('canvas');
+    c.width = targetW;
+    c.height = targetH;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    // Base image
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    // IMPORTANT: Mask all post-effects to the ship alpha so we never paint a rectangle around it.
+
+    // Directional highlight sheen (masked to ship alpha)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = skin === 'skin_gold' ? 0.18 : 0.14;
+    const sheen = ctx.createLinearGradient(-targetW * 0.15, 0, targetW * 0.85, targetH);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.9)');
+    sheen.addColorStop(0.35, 'rgba(255,255,255,0.15)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.restore();
+
+    // Subtle vignette for depth (masked to ship alpha)
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.globalAlpha = 0.18;
+    const vig = ctx.createRadialGradient(targetW / 2, targetH / 2, targetH * 0.12, targetW / 2, targetH / 2, targetH * 0.7);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, 'rgba(0,0,0,0.9)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.restore();
+
+    return c;
+  }
+
+  private getSourceSize(source: CanvasImageSource): { w: number; h: number } {
+    if (source instanceof HTMLImageElement) {
+      return { w: source.naturalWidth || source.width || 1, h: source.naturalHeight || source.height || 1 };
+    }
+    if (source instanceof HTMLCanvasElement) {
+      return { w: source.width || 1, h: source.height || 1 };
+    }
+    const s = source as any;
+    return { w: s?.width || 1, h: s?.height || 1 };
+  }
+
+  private isLikelyTransparentSprite(img: HTMLImageElement): boolean {
+    // Guard: if we can't read pixels, assume it's OK (same-origin images should be readable)
+    try {
+      const c = document.createElement('canvas');
+      const size = 64;
+      c.width = size;
+      c.height = size;
+      const ctx = c.getContext('2d', { willReadFrequently: true } as any) as CanvasRenderingContext2D | null;
+      if (!ctx) return true;
+
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(img, 0, 0, size, size);
+      const data = ctx.getImageData(0, 0, size, size).data;
+
+      const total = size * size;
+      let nonOpaque = 0;
+
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < 250) nonOpaque++;
+      }
+
+      // If essentially fully opaque, it will look like a rectangle in-game.
+      // We allow a tiny number of non-opaque pixels for resampling noise.
+      return nonOpaque > Math.max(16, total * 0.003);
+    } catch {
+      return true;
+    }
+  }
+
+  private loadShipTextureWithFallback(skin: string, candidates: string[]) {
+    this.shipTextureStatus[skin] = 'loading';
+
+    const tryLoad = (idx: number) => {
+      const img = new Image();
+      img.decoding = 'async';
+
+      img.onload = () => {
+        // Prevent “rectangle around the ship” if the asset has no transparency (e.g., full scene image)
+        if (!this.isLikelyTransparentSprite(img)) {
+          console.warn(`[ships] Ignoring ${candidates[idx]} for ${skin}: image has no transparency (use a PNG with transparent background).`);
+          if (idx + 1 < candidates.length) {
+            tryLoad(idx + 1);
+            return;
+          }
+          this.shipTextures[skin] = null;
+          this.shipTextureStatus[skin] = 'error';
+          this.shipEnhancedTextures[skin] = null;
+          this.shipEngineGlowSprites[skin] = null;
+          this.shipAuraSprites[skin] = null;
+          return;
+        }
+
+        this.shipTextures[skin] = img;
+        this.shipTextureStatus[skin] = 'loaded';
+
+        // Build cached “premium” sprites once (fast in-game rendering)
+        this.shipEnhancedTextures[skin] = this.buildEnhancedShipSprite(skin, img);
+        this.shipEngineGlowSprites[skin] = this.buildEngineGlowSprite(this.getShipGlowColor(skin));
+        this.shipAuraSprites[skin] = this.buildAuraSprite(this.getShipGlowColor(skin));
+      };
+
+      img.onerror = () => {
+        if (idx + 1 < candidates.length) {
+          tryLoad(idx + 1);
+          return;
+        }
+        this.shipTextures[skin] = null;
+        this.shipTextureStatus[skin] = 'error';
+        this.shipEnhancedTextures[skin] = null;
+        this.shipEngineGlowSprites[skin] = null;
+        this.shipAuraSprites[skin] = null;
+      };
+
+      img.src = this.assetUrl(candidates[idx]);
+    };
+
+    tryLoad(0);
+  }
+
+  loadShipTextures() {
+    // Hybrid setup:
+    // - Keep Torah + Choshen as procedural (as requested)
+    // - Default/Gold/Butzina are loaded from user-provided images in public/ships (so replacing files updates the in-game ships)
+
+    // Procedural (kept as-is)
+    const proceduralBuilders: Record<string, () => HTMLCanvasElement> = {
+      skin_torah: () => this.buildTorahShipSprite(),
+      skin_choshen: () => this.buildChoshenShipSprite()
+    };
+
+    Object.entries(proceduralBuilders).forEach(([skin, builder]) => {
+      this.shipTextures[skin] = null;
+      this.shipTextureStatus[skin] = 'loaded';
+      this.shipEnhancedTextures[skin] = builder();
+      this.shipEngineGlowSprites[skin] = this.buildEngineGlowSprite(this.getShipGlowColor(skin));
+      this.shipAuraSprites[skin] = this.buildAuraSprite(this.getShipGlowColor(skin));
+    });
+
+    // Image-based (replace these files to change ships in-game)
+    const imageCandidates: Record<string, string[]> = {
+      skin_default: ['ships/skin_default.png', 'ships/default.png'],
+      skin_gold: ['ships/skin_gold.png', 'ships/gold.png'],
+      skin_butzina: ['ships/skin_butzina.png', 'ships/butzina.png']
+    };
+
+    Object.entries(imageCandidates).forEach(([skin, candidates]) => {
+      this.shipTextures[skin] = null;
+      this.shipTextureStatus[skin] = 'idle';
+      this.shipEnhancedTextures[skin] = null;
+      this.shipEngineGlowSprites[skin] = null;
+      this.shipAuraSprites[skin] = null;
+      this.loadShipTextureWithFallback(skin, candidates);
+    });
+  }
+
+  // ============================
+  // Boss texture system (images)
+  // ============================
+
+  private getBossTextureDrawBox(id: BossId): { w: number; h: number; offsetY: number } {
+    // Tuned to roughly match the procedural bosses' footprint (before the mobile 0.75 scale in drawBoss()).
+    // offsetY shifts the image down a bit so the boss "sits" similarly to the procedural art.
+    if (id === 'ziz') return { w: 560, h: 420, offsetY: 30 };
+    return { w: 520, h: 420, offsetY: 30 };
+  }
+
+  private buildBossSprite(id: BossId, img: HTMLImageElement): HTMLCanvasElement {
+    const box = this.getBossTextureDrawBox(id);
+    const c = document.createElement('canvas');
+    c.width = box.w;
+    c.height = box.h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return c;
+
+    ctx.imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    ctx.clearRect(0, 0, c.width, c.height);
+
+    // Fit the image inside the boss box while preserving aspect ratio (contain)
+    const pad = Math.round(Math.min(c.width, c.height) * 0.05);
+    const availW = Math.max(1, c.width - pad * 2);
+    const availH = Math.max(1, c.height - pad * 2);
+
+    const srcW = img.naturalWidth || img.width || 1;
+    const srcH = img.naturalHeight || img.height || 1;
+    const scale = Math.min(availW / srcW, availH / srcH);
+
+    const w = srcW * scale;
+    const h = srcH * scale;
+    const dx = (c.width - w) / 2;
+    const dy = (c.height - h) / 2;
+
+    // Subtle baked shadow to integrate better with the VFX layer (cheap at runtime)
+    ctx.save();
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    ctx.drawImage(img, dx, dy, w, h);
+    ctx.restore();
+
+    return c;
+  }
+
+  private loadBossTextureWithFallback(id: BossId, candidates: string[]) {
+    this.bossTextureStatus[id] = 'loading';
+
+    const tryLoad = (idx: number) => {
+      const img = new Image();
+      img.decoding = 'async';
+
+      img.onload = () => {
+        // Prevent “rectangle around the boss” if the asset has no transparency
+        if (!this.isLikelyTransparentSprite(img)) {
+          console.warn(`[bosses] Ignoring ${candidates[idx]} for ${id}: image has no transparency (use a PNG/WebP with transparent background).`);
+          if (idx + 1 < candidates.length) {
+            tryLoad(idx + 1);
+            return;
+          }
+          this.bossTextures[id] = null;
+          this.bossTextureStatus[id] = 'error';
+          this.bossSprites[id] = null;
+          return;
+        }
+
+        this.bossTextures[id] = img;
+        this.bossTextureStatus[id] = 'loaded';
+        this.bossSprites[id] = this.buildBossSprite(id, img);
+      };
+
+      img.onerror = () => {
+        if (idx + 1 < candidates.length) {
+          tryLoad(idx + 1);
+          return;
+        }
+        this.bossTextures[id] = null;
+        this.bossTextureStatus[id] = 'error';
+        this.bossSprites[id] = null;
+      };
+
+      img.src = this.assetUrl(candidates[idx]);
+    };
+
+    tryLoad(0);
+  }
+
+  loadBossTextures() {
+    // Image-based (replace these files to change bosses in-game).
+    // If a boss image is missing, we fall back to the procedural boss rendering.
+    const imageCandidates: Record<BossId, string[]> = {
+      tannina: ['bosses/tannina.webp', 'bosses/tannina.png', 'bosses/boss_tannina.png', 'bosses/skin_tannina.png'],
+      koy: ['bosses/koy.webp', 'bosses/koy.png', 'bosses/boss_koy.png', 'bosses/skin_koy.png'],
+      shed: ['bosses/shed.webp', 'bosses/shed.png', 'bosses/boss_shed.png', 'bosses/skin_shed.png'],
+      ashmedai: ['bosses/ashmedai.webp', 'bosses/ashmedai.png', 'bosses/boss_ashmedai.png', 'bosses/skin_ashmedai.png'],
+      agirat: ['bosses/agirat.webp', 'bosses/agirat.png', 'bosses/boss_agirat.png', 'bosses/skin_agirat.png'],
+      leviathan: ['bosses/leviathan.webp', 'bosses/leviathan.png', 'bosses/boss_leviathan.png', 'bosses/skin_leviathan.png'],
+      ziz: ['bosses/ziz.webp', 'bosses/ziz.png', 'bosses/boss_ziz.png', 'bosses/skin_ziz.png']
+    };
+
+    (Object.keys(imageCandidates) as BossId[]).forEach((id) => {
+      this.bossTextures[id] = null;
+      this.bossTextureStatus[id] = 'idle';
+      this.bossSprites[id] = null;
+      this.loadBossTextureWithFallback(id, imageCandidates[id]);
+    });
+  }
+
+  private drawBossFromTexture(id: BossId): boolean {
+    const sprite = this.bossSprites[id];
+    if (sprite) {
+      const box = this.getBossTextureDrawBox(id);
+      this.ctx.save();
+      this.ctx.imageSmoothingEnabled = true;
+      (this.ctx as any).imageSmoothingQuality = 'high';
+      this.ctx.drawImage(sprite, -box.w / 2, -box.h / 2 + box.offsetY);
+      this.ctx.restore();
+      return true;
+    }
+
+    const img = this.bossTextures[id];
+    if (!img || !img.complete || img.naturalWidth <= 0) return false;
+
+    const box = this.getBossTextureDrawBox(id);
+    const pad = Math.round(Math.min(box.w, box.h) * 0.05);
+    const availW = Math.max(1, box.w - pad * 2);
+    const availH = Math.max(1, box.h - pad * 2);
+    const srcW = img.naturalWidth || img.width || 1;
+    const srcH = img.naturalHeight || img.height || 1;
+    const scale = Math.min(availW / srcW, availH / srcH);
+    const w = srcW * scale;
+    const h = srcH * scale;
+
+    const dx = -box.w / 2 + (box.w - w) / 2;
+    const dy = -box.h / 2 + box.offsetY + (box.h - h) / 2;
+
+    this.ctx.save();
+    this.ctx.imageSmoothingEnabled = true;
+    (this.ctx as any).imageSmoothingQuality = 'high';
+    this.ctx.drawImage(img, dx, dy, w, h);
+    this.ctx.restore();
+    return true;
   }
 
   applySkinWeapon() {
@@ -154,10 +1811,11 @@ export class GameEngine {
 
   initParallax() {
     this.starLayers = [[], [], []];
+    const isMobile = this.width < 600;
     const layerConfigs = [
-        { count: 120, speed: 0.1, size: 1, alpha: 0.2 },
-        { count: 80, speed: 0.8, size: 1.2, alpha: 0.4 },
-        { count: 50, speed: 3.0, size: 1.8, alpha: 0.6 }
+        { count: isMobile ? 70 : 120, speed: 0.1, size: 1, alpha: 0.2 },
+        { count: isMobile ? 50 : 80, speed: 0.8, size: 1.2, alpha: 0.4 },
+        { count: isMobile ? 32 : 50, speed: 3.0, size: 1.8, alpha: 0.6 }
     ];
     layerConfigs.forEach((lc, i) => {
         for(let j=0; j<lc.count; j++) {
@@ -194,7 +1852,7 @@ export class GameEngine {
       level: this.level, 
       subLevel: this.subLevel,
       weaponAmmo: this.weaponAmmo,
-      sugiaTitle: this.config.customDictionary ? 'תרגול מורה' : currentSugia.title
+      sugiaTitle: this.config.isTeacherPractice ? 'תרגול מורה' : currentSugia.title
     });
 
     const isMobile = this.width < 600;
@@ -266,8 +1924,15 @@ export class GameEngine {
         this.updateEnemies(dt);
         this.updateHazards(dt);
         this.updateBonuses(dt);
-        // this.updateJetParticles(dt); // Disabled - no trail effect
     }
+
+    // Smooth banking/tilt back to neutral over time (works for mouse + touch)
+    const velDecay = Math.pow(0.85, dt);
+    this.player.velocityX *= velDecay;
+    const maxBank = Math.PI / 6; // ~30deg
+    const targetBankAngle = Math.max(-maxBank, Math.min(maxBank, this.player.velocityX * 0.08));
+    const bankEase = 1 - Math.pow(0.85, dt);
+    this.player.bankAngle += (targetBankAngle - this.player.bankAngle) * bankEase;
     
     this.particlePool.forEach(p => { if(p.active) p.update(dt); });
     if (!this.enemyPool.some(e => e.active) && !this.boss && !this.playerExploding && !this.isTransitioning && Math.random() < 0.1 * dt) this.startRound();
@@ -331,6 +1996,108 @@ export class GameEngine {
       if (this.gameFrame % 4 === 0) this.spawnExplosion(p.x, this.boss.y + 50, p.type === 'fire' ? '#f97316' : '#fbbf24', 1);
       this.onStatsUpdate({ bossHpPercent: Math.max(0, (this.boss.hp / this.boss.maxHp) * 100) });
       if (this.boss.hp <= 0) this.endBossFight();
+  }
+
+  private getBossIdForLevel(level: number): BossId {
+      if (level === 1) return 'tannina';
+      if (level === 8) return 'koy';
+      if (level === 15) return 'shed';
+      if (level === 22) return 'ashmedai';
+      if (level === 29) return 'agirat';
+      if (level === 36) return 'leviathan';
+      return 'ziz';
+  }
+
+  private getBossDifficultyMult(id: BossId): number {
+      // Slightly increasing base difficulty across the sequence
+      if (id === 'tannina') return 1.0;
+      if (id === 'koy') return 1.05;
+      if (id === 'shed') return 1.10;
+      if (id === 'ashmedai') return 1.15;
+      if (id === 'agirat') return 1.18;
+      if (id === 'leviathan') return 1.22;
+      return 1.28; // ziz
+  }
+
+  private getBossThemeColor(id: BossId): string {
+      if (id === 'tannina') return '#60a5fa';
+      if (id === 'koy') return '#fbbf24';
+      if (id === 'shed') return '#a855f7';
+      if (id === 'ashmedai') return '#ef4444';
+      if (id === 'agirat') return '#ec4899';
+      if (id === 'leviathan') return '#22d3ee';
+      return '#e2e8f0'; // ziz
+  }
+
+  private getBossAuraSprite(id: BossId): HTMLCanvasElement {
+      const existing = this.bossAuraSprites[id];
+      if (existing) return existing;
+      const sprite = this.buildAuraSprite(this.getBossThemeColor(id));
+      this.bossAuraSprites[id] = sprite;
+      return sprite;
+  }
+
+  private drawBossVfx(id: BossId, loop: number) {
+      const color = this.getBossThemeColor(id);
+      const aura = this.getBossAuraSprite(id);
+      const t = this.gameFrame * 0.02;
+      const pulse = 0.88 + Math.sin(t * 2) * 0.12;
+      const loopBoost = 1 + Math.min(0.6, loop * 0.08);
+
+      // Big aura ring
+      const size = 560 * pulse * loopBoost;
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = 0.22;
+      this.ctx.rotate(t * 0.5);
+      this.ctx.drawImage(aura, -size / 2, -size / 2, size, size);
+      this.ctx.restore();
+
+      // Secondary counter-rotation ring
+      const size2 = size * 0.78;
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = 0.14;
+      this.ctx.rotate(-t * 0.85 + 0.8);
+      this.ctx.drawImage(aura, -size2 / 2, -size2 / 2, size2, size2);
+      this.ctx.restore();
+
+      // Arc shards (dynamic, very cheap)
+      const rgb = this.hexToRgb(color) || { r: 226, g: 232, b: 240 };
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.lineCap = 'round';
+      this.ctx.lineWidth = 6;
+      this.ctx.shadowBlur = 18;
+      this.ctx.shadowColor = color;
+      this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.18)`;
+      const r = 270 * loopBoost;
+      for (let i = 0; i < 3; i++) {
+          const a0 = t * 0.9 + i * 2.1;
+          const span = 0.9 + Math.sin(t * 1.6 + i) * 0.25;
+          this.ctx.globalAlpha = 0.12 + 0.10 * (0.5 + 0.5 * Math.sin(t * 1.8 + i));
+          this.ctx.beginPath();
+          this.ctx.arc(0, 20, r, a0, a0 + span);
+          this.ctx.stroke();
+      }
+      this.ctx.restore();
+
+      // Floating spark particles
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`;
+      const pCount = 10;
+      for (let i = 0; i < pCount; i++) {
+          const a = t * 1.7 + (i / pCount) * Math.PI * 2;
+          const rr = 190 * loopBoost + Math.sin(t * 0.9 + i) * 35;
+          const x = Math.cos(a) * rr;
+          const y = 20 + Math.sin(a) * rr * 0.65;
+          this.ctx.globalAlpha = 0.06 + 0.10 * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, 2.4, 0, Math.PI * 2);
+          this.ctx.fill();
+      }
+      this.ctx.restore();
   }
 
   applyHoming(p: any, dt: number) {
@@ -540,11 +2307,11 @@ export class GameEngine {
       if (!this.playerExploding) this.drawPlayer();
       this.bossProjectiles.forEach(p => {
           if (!p) return;
-          this.ctx.save(); this.ctx.fillStyle = '#ef4444'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = '#ef4444';
-          this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 15, 0, Math.PI*2); this.ctx.fill(); this.ctx.restore();
-          if(Math.hypot(p.x - this.player.x, p.y - this.player.y) < 32) { this.handleMiss(); p.y = 5000; }
+          this.drawBossProjectile(p);
+          const hitRadius = p.radius ?? 28;
+          if(Math.hypot(p.x - this.player.x, p.y - this.player.y) < hitRadius) { this.handleMiss(); p.y = this.height + hitRadius; }
       });
-      this.bossProjectiles = this.bossProjectiles.filter(p => p.y < this.height + 50);
+      this.bossProjectiles = this.bossProjectiles.filter(p => p.y < this.height + 120 && p.x > -120 && p.x < this.width + 120);
       this.ctx.save();
       this.ctx.globalCompositeOperation = 'lighter';
       this.projectilePool.forEach(p => { if (p.active) this.drawProjectile(p); });
@@ -552,25 +2319,445 @@ export class GameEngine {
   }
 
   drawPlayer() {
-      // Draw engine particles first (behind the ship)
-      // this.drawJetParticles(); // Disabled - no trail effect
-
       this.ctx.save(); this.ctx.translate(this.player.x, this.player.y);
 
       // Apply banking rotation
       this.ctx.rotate(this.player.bankAngle);
 
-      // Ship glow effect
-      this.ctx.shadowBlur = 30;
-      this.ctx.shadowColor = 'rgba(100, 200, 255, 0.6)';
-
       if (this.shieldStrength > 0) {
-          const color = this.shieldStrength === 2 ? '#3b82f6' : '#93c5fd';
-          this.ctx.strokeStyle = color; this.ctx.lineWidth = 4; this.ctx.shadowBlur = 25; this.ctx.shadowColor = color;
-          this.ctx.beginPath(); this.ctx.arc(0, 0, 45, 0, Math.PI*2); this.ctx.stroke();
-          this.ctx.globalAlpha = 0.1; this.ctx.fillStyle = color; this.ctx.fill(); this.ctx.globalAlpha = 1;
+          const strong = this.shieldStrength === 2;
+          const radius = this.width < 600 ? 58 : 66;
+          const glow = strong ? '#7dd3fc' : '#a5b4fc';
+          const core = strong ? '#38bdf8' : '#93c5fd';
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'screen';
+
+          const fillG = this.ctx.createRadialGradient(0, 0, radius * 0.25, 0, 0, radius);
+          fillG.addColorStop(0, 'rgba(255,255,255,0.28)');
+          fillG.addColorStop(0.45, strong ? 'rgba(56,189,248,0.35)' : 'rgba(147,197,253,0.28)');
+          fillG.addColorStop(1, strong ? 'rgba(56,189,248,0.05)' : 'rgba(165,180,252,0.04)');
+
+          this.ctx.shadowBlur = 28;
+          this.ctx.shadowColor = glow;
+          this.ctx.fillStyle = fillG;
+          this.ctx.beginPath(); this.ctx.arc(0, 0, radius, 0, Math.PI*2); this.ctx.fill();
+
+          // Outer crisp ring
+          this.ctx.lineWidth = 4;
+          this.ctx.strokeStyle = core;
+          this.ctx.beginPath(); this.ctx.arc(0, 0, radius * 0.96, 0, Math.PI*2); this.ctx.stroke();
+
+          // Animated dash ring
+          this.ctx.lineWidth = 2;
+          this.ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+          this.ctx.setLineDash([10, 8]);
+          this.ctx.lineDashOffset = -(this.gameFrame * 0.4);
+          this.ctx.beginPath(); this.ctx.arc(0, 0, radius * 0.82, 0, Math.PI*2); this.ctx.stroke();
+
+          // Inner glow rim
+          this.ctx.setLineDash([]);
+          this.ctx.lineWidth = 1.5;
+          this.ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+          this.ctx.beginPath(); this.ctx.arc(0, 0, radius * 0.7, 0, Math.PI*2); this.ctx.stroke();
+
+          this.ctx.restore();
       }
+
+      // Let the ship renderer control its own shadows/glow (prevents double-blur)
+      this.ctx.shadowBlur = 0;
+      this.ctx.shadowColor = 'transparent';
       this.renderShip();
+      this.ctx.restore();
+  }
+
+  private getShipGlowColor(skin: string): string {
+      if (skin === 'skin_gold') return '#fbbf24';
+      if (skin === 'skin_butzina') return '#a855f7';
+      if (skin === 'skin_torah') return '#f97316';
+      if (skin === 'skin_choshen') return '#fbbf24';
+      return '#3b82f6';
+  }
+
+  private drawChoshenChains(w: number, h: number) {
+      // PERFORMANCE-FIRST: short, fluttering golden chains (minimal draw ops)
+      const isMobile = this.width < 600;
+      const t = this.gameFrame * 0.065;
+      const speed = Math.min(1.2, Math.abs(this.player.velocityX) * 0.03);
+      const swing = 0.85 + speed * 0.65;
+
+      const attachY = -h * 0.30;
+      const attachX = w * 0.37;
+      const chainLen = h * (isMobile ? 0.36 : 0.46);
+      const segments = isMobile ? 4 : 6;
+
+      const drawChain = (side: -1 | 1) => {
+          const startX = side * attachX;
+          const startY = attachY;
+          const phase = t * 1.25 + side * 0.9;
+
+          this.ctx.beginPath();
+          let endX = startX;
+          let endY = startY;
+          for (let s = 0; s <= segments; s++) {
+              const p = s / segments;
+              const y = startY + p * chainLen;
+              const amp = (isMobile ? 5.5 : 8.5) * swing * (0.22 + p * 0.78);
+              const bankPull = this.player.bankAngle * 16 * p * side;
+              const x = startX + Math.sin(phase + p * 3.1) * amp + bankPull;
+              endX = x; endY = y;
+              if (s === 0) this.ctx.moveTo(x, y);
+              else this.ctx.lineTo(x, y);
+          }
+          this.ctx.stroke();
+
+          // Tiny sparkle at the chain end
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.globalAlpha = 0.22;
+          this.ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+          this.ctx.lineWidth = 1.5;
+          this.ctx.beginPath();
+          this.ctx.moveTo(endX - 4, endY);
+          this.ctx.lineTo(endX + 4, endY);
+          this.ctx.moveTo(endX, endY - 4);
+          this.ctx.lineTo(endX, endY + 4);
+          this.ctx.stroke();
+          this.ctx.restore();
+      };
+
+      this.ctx.save();
+      this.ctx.lineCap = 'round';
+      this.ctx.lineJoin = 'round';
+
+      // Base gold chain
+      this.ctx.globalCompositeOperation = 'source-over';
+      this.ctx.globalAlpha = 0.75;
+      this.ctx.strokeStyle = '#fbbf24';
+      this.ctx.lineWidth = isMobile ? 2.0 : 2.6;
+      drawChain(-1);
+      drawChain(1);
+
+      // Highlight pass (cheap)
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = 0.18;
+      this.ctx.strokeStyle = '#fff3c4';
+      this.ctx.lineWidth = isMobile ? 1.1 : 1.4;
+      drawChain(-1);
+      drawChain(1);
+
+      this.ctx.restore();
+  }
+
+  private renderShipWithTexture(source: CanvasImageSource, skin: string, scale: number) {
+      this.ctx.save();
+
+      // Lightweight texture rendering (performance-first)
+      this.ctx.imageSmoothingEnabled = true;
+      (this.ctx as any).imageSmoothingQuality = 'medium';
+
+      // Slight per-skin scaling for nicer silhouette match
+      const effectiveScale =
+          skin === 'skin_gold' ? scale * 1.22 :
+          skin === 'skin_butzina' ? scale * 1.1 :
+          skin === 'skin_torah' ? scale * 1.06 :
+          skin === 'skin_choshen' ? scale * 1.04 :
+          scale;
+
+      this.ctx.scale(effectiveScale, effectiveScale);
+
+      const srcSize = this.getSourceSize(source);
+      const aspect = srcSize.w / Math.max(1, srcSize.h);
+      let baseHeight = 92;
+      if (skin === 'skin_choshen') baseHeight = 88;
+      else if (skin === 'skin_torah') baseHeight = 102;
+      else if (skin === 'skin_butzina') baseHeight = 100;
+      else if (skin === 'skin_gold') baseHeight = 104;
+
+      const h = baseHeight;
+      const w = h * aspect;
+
+      // Dynamic aura (cheap: pre-baked sprite + rotation/pulse)
+      const auraSprite = this.shipAuraSprites[skin];
+      // Torah has its own live fire VFX; skipping the generic aura also avoids any "square" feeling.
+      if (auraSprite && skin !== 'skin_torah') {
+          const t = this.gameFrame * 0.03;
+          const pulse = 0.88 + Math.sin(t * 2) * 0.12;
+          const auraSize = Math.max(w, h) * 1.85 * pulse;
+
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.globalAlpha = 0.22;
+          this.ctx.rotate(t * 0.7);
+          this.ctx.drawImage(auraSprite, -auraSize / 2, -auraSize / 2, auraSize, auraSize);
+          this.ctx.restore();
+
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.globalAlpha = 0.14;
+          this.ctx.rotate(-t * 1.05 + 0.6);
+          const auraSize2 = auraSize * 0.82;
+          this.ctx.drawImage(auraSprite, -auraSize2 / 2, -auraSize2 / 2, auraSize2, auraSize2);
+          this.ctx.restore();
+
+          // Orbiting sparkles (very cheap)
+          const glowColor = this.getShipGlowColor(skin);
+          const rgb = this.hexToRgb(glowColor) || { r: 96, g: 165, b: 250 };
+          const orbCount =
+              skin === 'skin_choshen' ? 5 :
+              skin === 'skin_torah' ? 4 :
+              skin === 'skin_butzina' ? 4 :
+              skin === 'skin_gold' ? 4 : 3;
+          const orbR = Math.max(w, h) * 0.70;
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          const choshenColors = ['#ef4444', '#22c55e', '#3b82f6', '#eab308', '#a855f7', '#06b6d4', '#f97316', '#ec4899'];
+          for (let i = 0; i < orbCount; i++) {
+              const a = t * 2.2 + (i / orbCount) * Math.PI * 2;
+              const x = Math.cos(a) * orbR;
+              const y = Math.sin(a) * orbR * 0.65;
+              this.ctx.globalAlpha = 0.08 + 0.10 * (0.5 + 0.5 * Math.sin(t * 3 + i));
+              if (skin === 'skin_choshen') {
+                  const cHex = choshenColors[i % choshenColors.length];
+                  const cRgb = this.hexToRgb(cHex) || rgb;
+                  this.ctx.fillStyle = `rgba(${cRgb.r}, ${cRgb.g}, ${cRgb.b}, 1)`;
+              } else {
+                  this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`;
+              }
+              this.ctx.beginPath();
+              const r = skin === 'skin_choshen' ? 2.4 : 2.1;
+              this.ctx.arc(x, y, r, 0, Math.PI * 2);
+              this.ctx.fill();
+          }
+          this.ctx.restore();
+      }
+
+      // Choshen special: short golden chains fluttering behind (drawn behind the ship)
+      if (skin === 'skin_choshen') {
+          this.drawChoshenChains(w, h);
+      }
+
+      // Simple shadow (no blur) for depth
+      this.ctx.save();
+      this.ctx.globalAlpha = 0.22;
+      this.ctx.drawImage(source, -w / 2 + 2, -h / 2 + 4, w, h);
+      this.ctx.restore();
+
+      // Main ship texture
+      this.ctx.drawImage(source, -w / 2, -h / 2, w, h);
+
+      // Skin-specific “premium” micro VFX (lightweight)
+      {
+          const t = this.gameFrame * 0.03;
+          const glowColor = this.getShipGlowColor(skin);
+
+          if (skin === 'skin_gold') {
+              // Beam emitter lens pulse near the nose
+              const noseY = -h / 2 + 14;
+              const pulse = 0.75 + Math.sin(t * 6) * 0.25;
+              this.ctx.save();
+              this.ctx.globalCompositeOperation = 'lighter';
+              this.ctx.globalAlpha = 0.35 * pulse;
+              const g = this.ctx.createRadialGradient(0, noseY, 0, 0, noseY, 22);
+              g.addColorStop(0, 'rgba(255,255,255,0.95)');
+              g.addColorStop(0.25, 'rgba(255,240,180,0.75)');
+              g.addColorStop(0.6, 'rgba(251,191,36,0.25)');
+              g.addColorStop(1, 'rgba(251,191,36,0)');
+              this.ctx.fillStyle = g;
+              this.ctx.beginPath();
+              this.ctx.arc(0, noseY, 22, 0, Math.PI * 2);
+              this.ctx.fill();
+              this.ctx.restore();
+          } else if (skin === 'skin_torah') {
+              // Living fire (dynamic): flickering flames + pulsing holy orbs + rising sparks
+              const isMobile = this.width < 600;
+              const flameCount = isMobile ? 2 : 3;
+
+              const flameBaseX = w * 0.40;
+              const flameBaseY = h * 0.37;
+              const orbX = w * 0.41;
+              const orbY = -h * 0.02;
+
+              const time = t * 1.65;
+              const maxDim = Math.max(w, h);
+
+              this.ctx.save();
+              this.ctx.globalCompositeOperation = 'lighter';
+
+              // Pulsing orbs (left + right)
+              for (const side of [-1, 1] as const) {
+                  const bob = Math.sin(time * 1.15 + side) * (isMobile ? 2.4 : 3.2);
+                  const ox = side * orbX;
+                  const oy = orbY + bob;
+                  const p = 0.72 + 0.28 * Math.sin(time * 3.2 + side * 0.9);
+                  const rr = (isMobile ? 14 : 18) + Math.sin(time * 2.4 + side) * (isMobile ? 2.5 : 3.5);
+
+                  this.ctx.globalAlpha = 0.22 * p;
+                  const g = this.ctx.createRadialGradient(ox, oy, 0, ox, oy, rr * 2.2);
+                  g.addColorStop(0, 'rgba(255,255,255,0.95)');
+                  g.addColorStop(0.18, 'rgba(251,191,36,0.78)');
+                  g.addColorStop(0.45, 'rgba(249,115,22,0.55)');
+                  g.addColorStop(0.75, 'rgba(220,38,38,0.22)');
+                  g.addColorStop(1, 'rgba(220,38,38,0)');
+                  this.ctx.fillStyle = g;
+                  this.ctx.beginPath();
+                  this.ctx.arc(ox, oy, rr * 2.2, 0, Math.PI * 2);
+                  this.ctx.fill();
+
+                  // Inner hot core pulse
+                  this.ctx.globalAlpha = 0.16 * p;
+                  const core = this.ctx.createRadialGradient(ox - rr * 0.18, oy - rr * 0.18, 0, ox, oy, rr * 1.2);
+                  core.addColorStop(0, 'rgba(255,255,255,0.95)');
+                  core.addColorStop(0.55, 'rgba(255,220,160,0.55)');
+                  core.addColorStop(1, 'rgba(255,220,160,0)');
+                  this.ctx.fillStyle = core;
+                  this.ctx.beginPath();
+                  this.ctx.arc(ox - rr * 0.18, oy - rr * 0.18, rr * 1.2, 0, Math.PI * 2);
+                  this.ctx.fill();
+              }
+
+              // Flickering flame tongues (two clusters)
+              const drawFlameTongue = (x0: number, y0: number, side: -1 | 1, idx: number) => {
+                  const phase = time * 1.35 + idx * 0.95 + side * 0.8;
+                  const height = (isMobile ? 26 : 34) + Math.sin(phase * 1.2) * (isMobile ? 7 : 10);
+                  const width = (isMobile ? 12 : 16) + Math.sin(phase * 1.7) * (isMobile ? 4 : 6);
+                  const tipX = Math.sin(phase * 1.55) * (isMobile ? 6 : 9) + side * (4 + idx * 1.5);
+                  const tipY = y0 - height + Math.sin(phase * 2.3) * (isMobile ? 3 : 4);
+
+                  // Outer flame (orange/red)
+                  this.ctx.globalAlpha = 0.18 + idx * 0.04;
+                  const grad = this.ctx.createRadialGradient(x0 + tipX * 0.2, tipY, 0, x0, y0 - height * 0.35, height * 1.2);
+                  grad.addColorStop(0, 'rgba(255,255,255,0.35)');
+                  grad.addColorStop(0.2, 'rgba(251,191,36,0.32)');
+                  grad.addColorStop(0.55, 'rgba(249,115,22,0.28)');
+                  grad.addColorStop(0.8, 'rgba(220,38,38,0.16)');
+                  grad.addColorStop(1, 'rgba(220,38,38,0)');
+                  this.ctx.fillStyle = grad;
+                  this.ctx.beginPath();
+                  this.ctx.moveTo(x0 - width, y0);
+                  this.ctx.quadraticCurveTo(x0 - width * 0.6, y0 - height * 0.35, x0 + tipX, tipY);
+                  this.ctx.quadraticCurveTo(x0 + width * 0.6, y0 - height * 0.35, x0 + width, y0);
+                  this.ctx.closePath();
+                  this.ctx.fill();
+
+                  // Inner hot core (yellow/white)
+                  this.ctx.globalAlpha = 0.10 + idx * 0.03;
+                  const grad2 = this.ctx.createRadialGradient(x0 + tipX * 0.15, tipY + 2, 0, x0, y0 - height * 0.3, height);
+                  grad2.addColorStop(0, 'rgba(255,255,255,0.55)');
+                  grad2.addColorStop(0.25, 'rgba(251,191,36,0.42)');
+                  grad2.addColorStop(0.65, 'rgba(249,115,22,0.22)');
+                  grad2.addColorStop(1, 'rgba(249,115,22,0)');
+                  this.ctx.fillStyle = grad2;
+                  this.ctx.beginPath();
+                  this.ctx.moveTo(x0 - width * 0.65, y0);
+                  this.ctx.quadraticCurveTo(x0 - width * 0.38, y0 - height * 0.28, x0 + tipX * 0.75, tipY + 4);
+                  this.ctx.quadraticCurveTo(x0 + width * 0.38, y0 - height * 0.28, x0 + width * 0.65, y0);
+                  this.ctx.closePath();
+                  this.ctx.fill();
+              };
+
+              for (const side of [-1, 1] as const) {
+                  for (let i = 0; i < flameCount; i++) {
+                      const jitterX = Math.sin(time * 0.9 + i * 1.7 + side) * 2.2;
+                      const jitterY = Math.sin(time * 1.1 + i * 1.3 + side) * 1.6;
+                      drawFlameTongue(side * flameBaseX + jitterX, flameBaseY + jitterY, side, i);
+                  }
+              }
+
+              // Rising sparks (cheap)
+              const sparkCount = isMobile ? 5 : 8;
+              for (let i = 0; i < sparkCount; i++) {
+                  const seed = i * 12.9898;
+                  const drift = Math.sin(seed + time * 0.9) * (maxDim * 0.16);
+                  const up = ((time * 38 + i * 19) % (maxDim * 0.95));
+                  const sx = drift;
+                  const sy = flameBaseY - up;
+                  const p = 0.55 + 0.45 * Math.sin(time * 2.2 + i);
+                  this.ctx.globalAlpha = 0.05 + 0.07 * p;
+                  const g = this.ctx.createRadialGradient(sx, sy, 0, sx, sy, 10);
+                  g.addColorStop(0, 'rgba(255,255,255,0.65)');
+                  g.addColorStop(0.25, 'rgba(251,191,36,0.35)');
+                  g.addColorStop(0.6, 'rgba(249,115,22,0.20)');
+                  g.addColorStop(1, 'rgba(249,115,22,0)');
+                  this.ctx.fillStyle = g;
+                  this.ctx.beginPath();
+                  this.ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+                  this.ctx.fill();
+              }
+
+              this.ctx.restore();
+          } else if (skin === 'skin_butzina') {
+              // Mystical energy arcs
+              this.ctx.save();
+              this.ctx.globalCompositeOperation = 'lighter';
+              this.ctx.globalAlpha = 0.18;
+              this.ctx.shadowBlur = 14;
+              this.ctx.shadowColor = glowColor;
+              this.ctx.strokeStyle = 'rgba(192,132,252,0.28)';
+              this.ctx.lineWidth = 2.5;
+              const r = Math.max(w, h) * 0.78;
+              for (let i = 0; i < 2; i++) {
+                  const a0 = t * 1.2 + i * 2.2;
+                  const span = 0.9 + Math.sin(t * 1.8 + i) * 0.25;
+                  this.ctx.beginPath();
+                  this.ctx.arc(0, 0, r, a0, a0 + span);
+                  this.ctx.stroke();
+              }
+              this.ctx.restore();
+          } else if (skin === 'skin_choshen') {
+              // Prismatic sparkle crosses
+              const colors = ['#ef4444', '#22c55e', '#3b82f6', '#eab308', '#a855f7', '#06b6d4'];
+              this.ctx.save();
+              this.ctx.globalCompositeOperation = 'lighter';
+              const r = Math.max(w, h) * 0.76;
+              for (let i = 0; i < 4; i++) {
+                  const a = t * 1.7 + (i / 4) * Math.PI * 2;
+                  const x = Math.cos(a) * r;
+                  const y = Math.sin(a) * r * 0.65;
+                  const c = colors[i % colors.length];
+                  this.ctx.globalAlpha = 0.10;
+                  this.ctx.strokeStyle = c;
+                  this.ctx.lineWidth = 2;
+                  this.ctx.shadowBlur = 0;
+                  this.ctx.beginPath();
+                  this.ctx.moveTo(x - 5, y);
+                  this.ctx.lineTo(x + 5, y);
+                  this.ctx.moveTo(x, y - 5);
+                  this.ctx.lineTo(x, y + 5);
+                  this.ctx.stroke();
+              }
+              this.ctx.restore();
+          }
+      }
+
+      // Engine glow (cheap: pre-baked sprite, drawn as image)
+      const glowSprite = this.shipEngineGlowSprites[skin];
+      // Choshen is a plate (no engines) — avoid tinting stones with a golden engine glow
+      if (glowSprite && skin !== 'skin_choshen') {
+          const t = this.gameFrame * 0.10;
+          const pulse = 0.75 + Math.sin(t) * 0.25;
+          const engineY = (h / 2) - 10;
+          const gSize = 44;
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.globalAlpha = 0.55 * pulse;
+          this.ctx.drawImage(glowSprite, -gSize / 2, engineY - gSize / 2, gSize, gSize);
+          this.ctx.restore();
+      }
+
+      // Only add a single cheap glow layer when shield/special-weapon is active
+      // For Choshen, this overlay would wash out the gem colors (it always has a special weapon),
+      // so we skip it and rely on aura + prismatic sparkles instead.
+      if ((this.weaponType !== 'normal' || this.shieldStrength > 0) && skin !== 'skin_choshen') {
+          const glowColor = this.getShipGlowColor(skin);
+          this.ctx.save();
+          this.ctx.globalCompositeOperation = 'lighter';
+          this.ctx.globalAlpha = 0.18;
+          this.ctx.shadowBlur = 10;
+          this.ctx.shadowColor = glowColor;
+          this.ctx.drawImage(source, -w / 2, -h / 2, w, h);
+          this.ctx.restore();
+      }
+
       this.ctx.restore();
   }
 
@@ -578,8 +2765,27 @@ export class GameEngine {
       const skin = this.config.skin;
       const isMobile = this.width < 600;
       const isDesktop = this.width >= 1024;
-      const baseScale = isMobile ? 0.55 : 0.75;
+      // Bigger ship (requested) while keeping gameplay stable
+      const mobileScale = (() => {
+        // Tune for phones + landscape: keep ship readable but not overwhelming.
+        // ~320px => 0.85, ~600px => 0.92
+        const t = Math.max(0, Math.min(1, (this.width - 320) / 280));
+        return 0.85 + t * 0.07;
+      })();
+      const baseScale = isMobile ? mobileScale : 1.18;
       const scale = isDesktop ? baseScale * 1.25 : baseScale;
+
+      const enhanced = this.shipEnhancedTextures[skin];
+      if (enhanced) {
+          this.renderShipWithTexture(enhanced, skin, scale);
+          return;
+      }
+      const texture = this.shipTextures[skin];
+      if (texture && texture.complete && texture.naturalWidth > 0) {
+          this.renderShipWithTexture(texture, skin, scale);
+          return;
+      }
+
       const butzinaScale = skin === 'skin_butzina' ? scale * 1.4 : scale; // Make Butzina Kadisha bigger 
       if (skin === 'skin_choshen') {
           this.ctx.save(); this.ctx.scale(scale, scale);
@@ -1255,6 +3461,229 @@ export class GameEngine {
       this.ctx.restore();
   }
 
+  private getBossProjectileSprite(owner: BossId): HTMLCanvasElement {
+      const cached = this.bossProjectileSprites[owner];
+      if (cached) return cached;
+
+      const size = 120;
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      if (!ctx) return c;
+
+      const center = size / 2;
+      const baseR = 24;
+      ctx.translate(center, center);
+
+      const drawTannina = () => {
+          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, baseR * 1.45);
+          g.addColorStop(0, '#fdf4ff');
+          g.addColorStop(0.35, '#e9d5ff');
+          g.addColorStop(1, 'rgba(216,180,254,0)');
+          ctx.fillStyle = g;
+          ctx.shadowBlur = 22;
+          ctx.shadowColor = '#d8b4fe';
+          ctx.beginPath();
+          ctx.arc(0, 0, baseR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+          ctx.beginPath();
+          ctx.arc(0, 0, baseR * 0.7, 0, Math.PI * 2);
+          ctx.stroke();
+      };
+
+      const drawKoy = () => {
+          const r = baseR * 1.05;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = '#4b5563';
+          ctx.fillStyle = '#9ca3af';
+          ctx.beginPath();
+          for (let i = 0; i < 7; i++) {
+              const ang = (i / 7) * Math.PI * 2;
+              const jag = 0.8 + (i % 2 === 0 ? 0.18 : -0.05);
+              const rad = r * jag;
+              if (i === 0) ctx.moveTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
+              else ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = '#1f2937';
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+      };
+
+      const drawShed = () => {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = '#7c3aed';
+          const spike = baseR * 1.5;
+          ctx.fillStyle = '#4c1d95';
+          ctx.beginPath();
+          for (let i = 0; i < 10; i++) {
+              const ang = (i / 10) * Math.PI * 2;
+              const rad = i % 2 === 0 ? spike : baseR * 0.7;
+              if (i === 0) ctx.moveTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
+              else ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
+          }
+          ctx.closePath();
+          ctx.fill();
+          const innerG = ctx.createRadialGradient(0, 0, 0, 0, 0, baseR);
+          innerG.addColorStop(0, '#c084fc');
+          innerG.addColorStop(1, 'rgba(124,58,237,0)');
+          ctx.fillStyle = innerG;
+          ctx.beginPath();
+          ctx.arc(0, 0, baseR * 0.9, 0, Math.PI * 2);
+          ctx.fill();
+      };
+
+      const drawAshmedai = () => {
+          ctx.rotate(Math.PI / 2);
+          const flameG = ctx.createLinearGradient(0, -baseR * 1.6, 0, baseR * 1.2);
+          flameG.addColorStop(0, '#fff7ed');
+          flameG.addColorStop(0.35, '#f97316');
+          flameG.addColorStop(1, 'rgba(239,68,68,0.15)');
+          ctx.fillStyle = flameG;
+          ctx.shadowBlur = 18;
+          ctx.shadowColor = '#f97316';
+          ctx.beginPath();
+          ctx.moveTo(0, -baseR * 1.5);
+          ctx.quadraticCurveTo(baseR * 0.95, baseR * 0.2, 0, baseR * 1.2);
+          ctx.quadraticCurveTo(-baseR * 0.95, baseR * 0.2, 0, -baseR * 1.5);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.ellipse(0, -baseR * 0.2, baseR * 0.35, baseR * 0.5, 0, 0, Math.PI * 2);
+          ctx.fill();
+      };
+
+      const drawAgirat = () => {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = '#f472b6';
+          const r2 = baseR * 1.05;
+          ctx.fillStyle = '#ec4899';
+          ctx.beginPath();
+          ctx.moveTo(0, -r2);
+          ctx.quadraticCurveTo(r2 * 0.95, -r2 * 0.2, 0, r2);
+          ctx.quadraticCurveTo(-r2 * 0.95, -r2 * 0.2, 0, -r2);
+          ctx.fill();
+          const swirl = ctx.createRadialGradient(0, 0, 0, 0, 0, baseR);
+          swirl.addColorStop(0, '#ffe4f3');
+          swirl.addColorStop(1, 'rgba(244,114,182,0)');
+          ctx.fillStyle = swirl;
+          ctx.beginPath();
+          ctx.arc(0, 0, baseR * 0.85, 0, Math.PI * 2);
+          ctx.fill();
+      };
+
+      const drawLeviathan = () => {
+          const shardLen = baseR * 1.7;
+          ctx.rotate(Math.PI / 2);
+          const g = ctx.createLinearGradient(0, -shardLen, 0, shardLen * 0.25);
+          g.addColorStop(0, '#e0f2fe');
+          g.addColorStop(0.4, '#22d3ee');
+          g.addColorStop(1, 'rgba(14,165,233,0.1)');
+          ctx.fillStyle = g;
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = '#22d3ee';
+          ctx.beginPath();
+          ctx.moveTo(0, -shardLen);
+          ctx.lineTo(baseR * 0.9, shardLen * 0.2);
+          ctx.lineTo(0, shardLen * 0.55);
+          ctx.lineTo(-baseR * 0.9, shardLen * 0.2);
+          ctx.closePath();
+          ctx.fill();
+      };
+
+      const drawZiz = () => {
+          ctx.rotate(Math.PI / 2);
+          ctx.shadowBlur = 12;
+          ctx.shadowColor = '#fbbf24';
+          const g = ctx.createLinearGradient(-baseR, -baseR * 1.3, baseR, baseR * 0.8);
+          g.addColorStop(0, '#fff7d6');
+          g.addColorStop(0.5, '#facc15');
+          g.addColorStop(1, 'rgba(250,204,21,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.moveTo(0, -baseR * 1.3);
+          ctx.bezierCurveTo(baseR * 0.9, -baseR * 0.9, baseR * 0.9, baseR * 0.5, 0, baseR * 0.9);
+          ctx.bezierCurveTo(-baseR * 0.9, baseR * 0.5, -baseR * 0.9, -baseR * 0.9, 0, -baseR * 1.3);
+          ctx.fill();
+      };
+
+      const drawDefault = () => {
+          ctx.shadowBlur = 14;
+          ctx.shadowColor = '#ef4444';
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath();
+          ctx.arc(0, 0, baseR, 0, Math.PI * 2);
+          ctx.fill();
+      };
+
+      if (owner === 'tannina') drawTannina();
+      else if (owner === 'koy') drawKoy();
+      else if (owner === 'shed') drawShed();
+      else if (owner === 'ashmedai') drawAshmedai();
+      else if (owner === 'agirat') drawAgirat();
+      else if (owner === 'leviathan') drawLeviathan();
+      else if (owner === 'ziz') drawZiz();
+      else drawDefault();
+
+      this.bossProjectileSprites[owner] = c;
+      return c;
+  }
+
+  private drawBossProjectile(p: BossProjectile) {
+      if (!p) return;
+      const owner: BossId = p.owner || 'tannina';
+      const radius = p.radius ?? 18;
+      const sprite = this.getBossProjectileSprite(owner);
+      const baseRadius = 24;
+      const scalePulse = owner === 'tannina' ? 1 + Math.sin((p.tick || 0) * 0.08) * 0.05 : 1;
+      const scale = (radius / baseRadius) * scalePulse;
+
+      this.ctx.save();
+      this.ctx.translate(p.x, p.y);
+      let rot = p.spin || 0;
+      if (owner === 'ashmedai' || owner === 'leviathan' || owner === 'ziz') {
+          rot += Math.atan2(p.vy || 1, p.vx || 0) + Math.PI / 2;
+      }
+      if (rot) this.ctx.rotate(rot);
+      if (owner === 'tannina' || owner === 'shed' || owner === 'agirat') {
+          this.ctx.globalCompositeOperation = 'lighter';
+      }
+      this.ctx.scale(scale, scale);
+      this.ctx.drawImage(sprite, -sprite.width / 2, -sprite.height / 2);
+      this.ctx.restore();
+  }
+
+  private spawnBossProjectile(
+      bossId: BossId,
+      x: number,
+      y: number,
+      vx: number,
+      vy: number,
+      extras: Partial<BossProjectile> = {}
+  ) {
+      this.bossProjectiles.push({
+          x,
+          y,
+          vx,
+          vy,
+          owner: bossId,
+          radius: extras.radius ?? 24,
+          spin: extras.spin,
+          variant: extras.variant,
+          tick: 0,
+          seed: extras.seed ?? Math.random()
+      });
+      if (this.bossProjectiles.length > this.maxBossProjectiles) {
+          this.bossProjectiles.splice(0, this.bossProjectiles.length - this.maxBossProjectiles);
+      }
+  }
+
   updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
       b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
@@ -1264,31 +3693,104 @@ export class GameEngine {
       if(b.timer >= b.attackRate) {
           b.timer = 0;
 
-          // ישיר מיפוי של רמות לבוסים - יריות
-          if (this.level === 1) { // Tannina
-              this.bossProjectiles.push({x: b.x - 120, y: b.y + 100, vy: 4.0, vx: 0});
-              this.bossProjectiles.push({x: b.x + 120, y: b.y + 100, vy: 4.0, vx: 0});
-          } else if (this.level === 8) { // Koy
-              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
-          } else if (this.level === 15) { // Shed
-              for(let i=0; i<12; i++) { const angle = (i/12) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
-          } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
-              // יריות מכוונות לשחקן (5 יריות)
-              const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
-              for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
+          const bossId: BossId = (b.id as BossId) || this.getBossIdForLevel(this.level);
+          const spd: number = typeof b.speedMult === 'number' ? b.speedMult : 1;
 
-              // יריות מעגליות (8 יריות)
-              for(let i=0; i<8; i++) { const angle = (i/8) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5}); }
-
-              // יריות מתפזרות לצדדים (4 יריות)
-              for(let i=-1; i<=2; i++) this.bossProjectiles.push({x: b.x + i*80, y: b.y + 100, vy: 4.5, vx: i * 0.3});
-          } else if (this.level === 29) { // Agirat
+          // Attack patterns by boss (independent of level once bossCycleMode is enabled)
+          if (bossId === 'tannina') {
+              this.spawnBossProjectile(bossId, b.x - 120, b.y + 100, 0, 4.0 * spd, { radius: 16, variant: 'pulse' });
+              this.spawnBossProjectile(bossId, b.x + 120, b.y + 100, 0, 4.0 * spd, { radius: 16, variant: 'pulse' });
+          } else if (bossId === 'koy') {
+              for(let i=-2; i<=2; i++) {
+                  this.spawnBossProjectile(
+                      bossId,
+                      b.x,
+                      b.y + 100,
+                      i * 1.8 * spd,
+                      3.5 * spd,
+                      { radius: 18, spin: Math.random() * Math.PI * 2, seed: Math.random(), variant: 'rock' }
+                  );
+              }
+          } else if (bossId === 'shed') {
+              for(let i=0; i<12; i++) { 
+                  const angle = (i/12) * Math.PI * 2; 
+                  this.spawnBossProjectile(
+                      bossId,
+                      b.x,
+                      b.y + 100,
+                      Math.cos(angle)*4.5*spd,
+                      Math.sin(angle)*4.5*spd,
+                      { radius: 15, variant: 'void', spin: Math.random() * 0.6 }
+                  ); 
+              }
+          } else if (bossId === 'ashmedai') {
+              // Targeted shots (5)
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
-              for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
-          } else if (this.level === 36) { // Leviathan
-              for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
-          } else { // Ziz
-              for(let i=0; i<8; i++) { const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
+              for(let i=-2; i<=2; i++) this.spawnBossProjectile(
+                  bossId,
+                  b.x,
+                  b.y+100,
+                  Math.cos(ang+i*0.2)*5*spd,
+                  Math.sin(ang+i*0.2)*5*spd,
+                  { radius: 18, variant: 'fire' }
+              );
+
+              // Radial shots (8)
+              for(let i=0; i<8; i++) { 
+                  const angle = (i/8) * Math.PI * 2; 
+                  this.spawnBossProjectile(
+                      bossId,
+                      b.x,
+                      b.y + 100,
+                      Math.cos(angle)*5*spd,
+                      Math.sin(angle)*5*spd,
+                      { radius: 16, variant: 'ember' }
+                  ); 
+              }
+
+              // Side spread (4)
+              for(let i=-1; i<=2; i++) this.spawnBossProjectile(
+                  bossId,
+                  b.x + i*80,
+                  b.y + 100,
+                  i * 0.3 * spd,
+                  4.5*spd,
+                  { radius: 14, variant: 'ember' }
+              );
+          } else if (bossId === 'agirat') {
+              const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
+              for(let i=-1; i<=1; i++) this.spawnBossProjectile(
+                  bossId,
+                  b.x,
+                  b.y+100,
+                  Math.cos(ang+i*0.2)*5*spd,
+                  Math.sin(ang+i*0.2)*5*spd,
+                  { radius: 15, variant: 'hex' }
+              );
+          } else if (bossId === 'leviathan') {
+              for(let i=0; i<10; i++) { 
+                  const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; 
+                  this.spawnBossProjectile(
+                      bossId,
+                      b.x,
+                      b.y+100,
+                      Math.cos(ang)*4.5*spd,
+                      Math.sin(ang)*4.5*spd,
+                      { radius: 17, variant: 'tide', spin: Math.random() * 0.3 }
+                  ); 
+              }
+          } else { // ziz
+              for(let i=0; i<8; i++) { 
+                  const ang = (this.gameFrame*0.1) + (i/8)*Math.PI*2; 
+                  this.spawnBossProjectile(
+                      bossId,
+                      b.x,
+                      b.y+100,
+                      Math.cos(ang)*4*spd,
+                      Math.sin(ang)*4*spd,
+                      { radius: 16, variant: 'feather', spin: Math.random() * Math.PI * 2 }
+                  ); 
+              }
           }
           Sound.play('shoot');
       }
@@ -1296,9 +3798,15 @@ export class GameEngine {
       for (let i = this.bossProjectiles.length - 1; i >= 0; i--) {
         let p = this.bossProjectiles[i];
         if (!p) continue;
+        p.tick = (p.tick || 0) + dt;
+        if (p.spin !== undefined) p.spin += (p.owner === 'koy' ? 0.025 : 0.012) * dt;
+        if (p.owner === 'tannina') p.x += Math.sin((p.tick || 0) * 0.09) * 0.7;
+        if (p.owner === 'leviathan') p.x += Math.sin((p.tick || 0) * 0.07) * 0.8;
+        if (p.owner === 'ziz') p.x += Math.cos((p.tick || 0) * 0.05) * 0.45;
         p.y += p.vy * dt;
         if (p.vx) p.x += p.vx * dt;
-        if(Math.hypot(p.x - this.player.x, p.y - this.player.y) < 32) { this.handleMiss(); this.bossProjectiles.splice(i, 1); }
+        const hitRadius = p.radius ?? 28;
+        if(Math.hypot(p.x - this.player.x, p.y - this.player.y) < hitRadius) { this.handleMiss(); this.bossProjectiles.splice(i, 1); }
       }
   }
 
@@ -1308,33 +3816,36 @@ export class GameEngine {
       this.ctx.save(); this.ctx.translate(b.x, b.y);
       if (isMobile) this.ctx.scale(0.75, 0.75);
 
-      // ישיר מיפוי של רמות לבוסים
-      let bName = "";
-      if (this.level === 1) {
-        this.drawTannina();
-        bName = "תנינא";
-      } else if (this.level === 8) {
-        this.drawKoy();
-        bName = "כוי";
-      } else if (this.level === 15) {
-        this.drawShed();
-        bName = "שד";
-      } else if (this.level === 22) {
-        this.drawAshmedai();
-        bName = "אשמדאי";
-      } else if (this.level === 29) {
-        this.drawAgirat();
-        bName = "אגירת";
-      } else if (this.level === 36) {
-        this.drawLeviathan();
-        bName = "לויתן";
-      } else {
-        this.drawZiz();
-        bName = "זיז שדי";
-      }
+      const bossId: BossId = (b.id as BossId) || this.getBossIdForLevel(this.level);
+      const loop = typeof (b as any).loop === 'number' ? (b as any).loop : 0;
 
-      this.ctx.fillStyle = 'white'; this.ctx.shadowBlur = 20; this.ctx.shadowColor = 'cyan';
-      this.ctx.font = 'bold 46px Frank Ruhl Libre'; this.ctx.textAlign = 'center'; this.ctx.fillText(bName, 0, 30);
+      // High-quality boss VFX layer (dynamic aura + particles)
+      this.drawBossVfx(bossId, loop);
+
+      // Subtle “camera light” from above for depth (masked by boss body because we only draw under it)
+      this.ctx.save();
+      this.ctx.globalCompositeOperation = 'lighter';
+      this.ctx.globalAlpha = 0.12;
+      const light = this.ctx.createRadialGradient(0, -120, 20, 0, -120, 260);
+      light.addColorStop(0, 'rgba(255,255,255,0.35)');
+      light.addColorStop(0.4, 'rgba(255,255,255,0.10)');
+      light.addColorStop(1, 'rgba(255,255,255,0)');
+      this.ctx.fillStyle = light;
+      this.ctx.beginPath();
+      this.ctx.arc(0, 20, 320, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.restore();
+
+      // Prefer user-provided boss image (public/bosses/...) with safe fallback to procedural bosses
+      if (!this.drawBossFromTexture(bossId)) {
+          if (bossId === 'tannina') this.drawTannina();
+          else if (bossId === 'koy') this.drawKoy();
+          else if (bossId === 'shed') this.drawShed();
+          else if (bossId === 'ashmedai') this.drawAshmedai();
+          else if (bossId === 'agirat') this.drawAgirat();
+          else if (bossId === 'leviathan') this.drawLeviathan();
+          else this.drawZiz();
+      }
       this.ctx.restore();
   }
 
@@ -2840,37 +5351,49 @@ export class GameEngine {
   }
 
   updateJetParticles(dt: number) {
+      const isMobile = this.width < 600;
       // Create smooth continuous contrail - short and tapered trail
-      const trailLength = 12; // Short trail
-      const segmentSpacing = 10; // Larger spacing for shorter trail
+      const trailLength = isMobile ? 8 : 12;
+      const spawnInterval = isMobile ? 3 : 2; // frames
+      const spawnAlpha = isMobile ? 0.75 : 0.9;
+      const spawnSize = isMobile ? 3.0 : 3.5;
 
-      // Engine color based on skin
-      const engineColor = this.config.skin === 'skin_gold' ? '#fbbf24' :
-                         this.config.skin === 'skin_butzina' ? '#d8b4fe' :
-                         this.config.skin === 'skin_stealth' ? '#ef4444' :
-                         this.config.skin === 'skin_default' ? '#fb7185' : '#00ff88';
+      // Spawn new segments at a steady rate (and rotate engine offsets with banking)
+      if (this.gameFrame - this.lastJetSpawnFrame >= spawnInterval) {
+          this.lastJetSpawnFrame = this.gameFrame;
 
-      // Add new trail segments less frequently for smooth constant trail
-      if (this.jetParticles.length === 0 || this.jetParticles[this.jetParticles.length - 1].y - this.player.y > segmentSpacing) {
-          // Left engine trail - constant smooth trail
+          const cos = Math.cos(this.player.bankAngle);
+          const sin = Math.sin(this.player.bankAngle);
+          const localY = 38;
+
+          const leftLocalX = -18;
+          const rightLocalX = 18;
+
+          const leftX = this.player.x + leftLocalX * cos - localY * sin;
+          const leftY = this.player.y + leftLocalX * sin + localY * cos;
+
+          const rightX = this.player.x + rightLocalX * cos - localY * sin;
+          const rightY = this.player.y + rightLocalX * sin + localY * cos;
+
+          // Left engine trail
           this.jetParticles.push({
-              x: this.player.x - 18,
-              y: this.player.y + 38,
+              x: leftX,
+              y: leftY,
               vx: 0,
               vy: 0,
-              alpha: 0.9, // High opacity for visibility
-              size: 3.5,
+              alpha: spawnAlpha,
+              size: spawnSize,
               life: trailLength
           });
 
-          // Right engine trail - constant smooth trail
+          // Right engine trail
           this.jetParticles.push({
-              x: this.player.x + 18,
-              y: this.player.y + 38,
+              x: rightX,
+              y: rightY,
               vx: 0,
               vy: 0,
-              alpha: 0.9, // High opacity for visibility
-              size: 3.5,
+              alpha: spawnAlpha,
+              size: spawnSize,
               life: trailLength
           });
       }
@@ -2879,10 +5402,10 @@ export class GameEngine {
       for (let i = this.jetParticles.length - 1; i >= 0; i--) {
           const p = this.jetParticles[i];
           p.life -= dt * 0.5; // Faster fade for shorter trail
-          p.alpha = Math.max(0, p.alpha - 0.005 * dt); // Consistent fade
+          p.alpha = Math.max(0, p.alpha - (isMobile ? 0.007 : 0.005) * dt); // Slightly faster fade on mobile
 
           // Constant downward movement for smooth trail
-          p.y += 2.5 * dt; // Slower, more consistent movement
+          p.y += (isMobile ? 2.0 : 2.5) * dt; // Slower, more consistent movement
 
           // Minimal horizontal drift for stability
           p.x += (this.player.x - p.x) * 0.02 * dt;
@@ -2907,8 +5430,9 @@ export class GameEngine {
       // Engine color based on skin
       const engineColor = this.config.skin === 'skin_gold' ? '#fbbf24' :
                          this.config.skin === 'skin_butzina' ? '#d8b4fe' :
-                         this.config.skin === 'skin_stealth' ? '#ef4444' :
-                         this.config.skin === 'skin_default' ? '#fb7185' : '#00ff88';
+                         this.config.skin === 'skin_torah' ? '#f97316' :
+                         this.config.skin === 'skin_choshen' ? '#a855f7' :
+                         this.config.skin === 'skin_default' ? '#60a5fa' : '#00ff88';
 
       // Draw smooth contrail streams - thick at start, thin at end
       const leftTrail = this.jetParticles.filter((_, i) => i % 2 === 0).reverse();
@@ -3087,19 +5611,69 @@ export class GameEngine {
 
   setPlayerPos(x: number, y: number) { 
       if (!this.isPaused && !this.isTransitioning) { 
-          this.player.x = x; 
-          this.player.y = Math.max(this.height * 0.4, Math.min(y, this.height - 100)); 
+          const oldX = this.player.x;
+          this.player.x = Math.max(20, Math.min(this.width - 20, x));
+          this.player.y = Math.max(this.height * 0.4, Math.min(y, this.height - 100));
+
+          // Update velocity + bank angle for mouse movement too
+          const actualDx = this.player.x - oldX;
+          this.player.velocityX = this.player.velocityX * 0.8 + actualDx * 0.2;
+          const maxBank = Math.PI / 6;
+          const targetBankAngle = Math.max(-maxBank, Math.min(maxBank, this.player.velocityX * 0.08));
+          this.player.bankAngle = this.player.bankAngle * 0.85 + targetBankAngle * 0.15;
       } 
   }
 
   startBossFight() {
       this.bossDamageTaken = false;
-      this.boss = { x: this.width / 2, y: -450, targetY: 220, maxHp: 250 + (this.level * 15), hp: 250 + (this.level * 15), currentText: "", frame: 0, attackRate: Math.max(45, 180 - (this.level * 2)) };
-      this.onStatsUpdate({ bossActive: true, bossHpPercent: 100, currentWord: "" });
+      const bossId: BossId = this.bossCycleMode
+          ? (BOSS_SEQUENCE[this.bossSequenceIndex] || 'tannina')
+          : this.getBossIdForLevel(this.level);
+
+      const baseHp = 250 + (this.level * 15);
+      const bossMult = this.getBossDifficultyMult(bossId);
+      const loopMult = this.bossCycleMode ? (1 + this.bossLoop * 0.35) : 1;
+      const hp = Math.round(baseHp * bossMult * loopMult);
+
+      const baseAttackRate = Math.max(45, 180 - (this.level * 2));
+      const attackRate = this.bossCycleMode
+          ? Math.max(35, Math.round(baseAttackRate / (bossMult * (1 + this.bossLoop * 0.18))))
+          : baseAttackRate;
+
+      const speedMult = this.bossCycleMode ? (1 + this.bossLoop * 0.12) : 1;
+
+      this.boss = {
+          id: bossId,
+          loop: this.bossCycleMode ? this.bossLoop : 0,
+          speedMult,
+          x: this.width / 2,
+          y: -450,
+          targetY: 220,
+          maxHp: hp,
+          hp,
+          currentText: "",
+          frame: 0,
+          attackRate
+      };
+      this.onStatsUpdate({ bossActive: true, bossHpPercent: 100, currentWord: "", bossName: BOSS_NAMES[bossId] });
   }
 
   endBossFight() { 
       if (!this.boss) return;
+      const defeatedId: BossId = (this.boss.id as BossId) || this.getBossIdForLevel(this.level);
+
+      // After first Ziz defeat, start looping bosses from the beginning with stronger stats
+      if (!this.bossCycleMode && defeatedId === 'ziz') {
+          this.bossCycleMode = true;
+          this.bossLoop = 1;
+          this.bossSequenceIndex = 0; // restart from first boss
+      } else if (this.bossCycleMode) {
+          const idx = BOSS_SEQUENCE.indexOf(defeatedId);
+          const nextIdx = idx >= 0 ? (idx + 1) % BOSS_SEQUENCE.length : 0;
+          if (nextIdx === 0) this.bossLoop++;
+          this.bossSequenceIndex = nextIdx;
+      }
+
       if (!this.bossDamageTaken) this.onAchievement('sinai');
       Sound.play('explosion');
       this.spawnExplosion(this.boss.x, this.boss.y, 'gold', 200); 
@@ -3108,7 +5682,7 @@ export class GameEngine {
       this.bossProjectiles = []; 
       this.triggerShake(50);
       
-      this.onStatsUpdate({bossActive: false, bossHpPercent: 0, score: this.score}); 
+      this.onStatsUpdate({bossActive: false, bossHpPercent: 0, score: this.score, bossName: undefined}); 
       this.onFeedback("ניצחון!", true); 
       
       this.isTransitioning = true;

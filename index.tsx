@@ -1,6 +1,7 @@
 
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import './ui.css';
 import App from './App';
 
 // רישום ה-Service Worker עם טיפול בעדכונים

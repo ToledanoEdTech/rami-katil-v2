@@ -16,6 +16,7 @@
      * vite.config.ts
      * manifest.json
      * index.html
+     * public/bosses/ (רק אם הוספת/החלפת תמונות של בוסים)
 
 4. כתוב הודעה: "שדרוג משחק"
 

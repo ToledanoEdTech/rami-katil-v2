@@ -18,3 +18,21 @@ View your app in AI Studio: https://ai.studio/apps/drive/17H39eHJexVtBM9nkrn2B49
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Boss Skins (תמונות לבוסים)
+
+כדי לשנות את המראה של הבוסים, מעלים תמונות לתיקייה `public/bosses/`.
+
+- **מומלץ (שמות קבצים):**
+  - `tannina.png`
+  - `koy.png`
+  - `shed.png`
+  - `ashmedai.png`
+  - `agirat.png`
+  - `leviathan.png`
+  - `ziz.png`
+
+- **דרישות:**
+  - PNG/WebP עם רקע שקוף (alpha). אם אין שקיפות, המשחק יתעלם מהקובץ כדי לא לצייר “ריבוע” סביב הבוס, ויחזור לציור המובנה.
+
+יש פירוט נוסף בתוך `public/bosses/README.txt`.
