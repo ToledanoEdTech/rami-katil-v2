@@ -1564,8 +1564,11 @@ export class GameEngine {
     const tryLoad = (idx: number) => {
       const img = new Image();
       img.decoding = 'async';
+      let handled = false;
 
-      img.onload = () => {
+      const handleLoad = () => {
+        if (handled) return;
+        handled = true;
         // Prevent “rectangle around the ship” if the asset has no transparency (e.g., full scene image)
         if (!this.isLikelyTransparentSprite(img)) {
           console.warn(`[ships] Ignoring ${candidates[idx]} for ${skin}: image has no transparency (use a PNG with transparent background).`);
@@ -1590,7 +1593,9 @@ export class GameEngine {
         this.shipAuraSprites[skin] = this.buildAuraSprite(this.getShipGlowColor(skin));
       };
 
-      img.onerror = () => {
+      const handleError = () => {
+        if (handled) return;
+        handled = true;
         if (idx + 1 < candidates.length) {
           tryLoad(idx + 1);
           return;
@@ -1602,7 +1607,16 @@ export class GameEngine {
         this.shipAuraSprites[skin] = null;
       };
 
+      img.onload = handleLoad;
+      img.onerror = handleError;
       img.src = this.assetUrl(candidates[idx]);
+
+      // If the image is already cached, `onload` may not fire in time for the first frame.
+      // Force-handle immediately to prevent a one-frame fallback/flicker.
+      if (img.complete) {
+        if (img.naturalWidth > 0) handleLoad();
+        else handleError();
+      }
     };
 
     tryLoad(0);

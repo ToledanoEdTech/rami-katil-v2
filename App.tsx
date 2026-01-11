@@ -142,6 +142,28 @@ function App() {
     Sound.init();
     const checkMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     setIsMobile(checkMobile);
+
+    // Preload ship + item images to avoid first-frame flicker when starting a game
+    try {
+      const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+      const base = rawBase.replace(/\/$/, '');
+      const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
+      [
+        // Ship skins (candidates used by GameEngine + shop cards)
+        'ships/skin_default.png', 'ships/default.png',
+        'ships/skin_gold.png', 'ships/gold.png',
+        'ships/skin_butzina.png', 'ships/butzina.png',
+        'ships/torah.png', 'ships/choshen.png',
+        // Items (shop)
+        'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png'
+      ].forEach((p) => {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = url(p);
+      });
+    } catch {
+      // ignore
+    }
     
     // התחלת מוזיקת תפריט בטעינה ראשונית
     if (gameState === 'MENU') {
@@ -154,7 +176,9 @@ function App() {
       Sound.resume();
       
       // הסרת המאזינים רק אם הצלחנו לנגן
-      if (!Sound.menuTrack.paused || !Sound.gameTrack.paused || (Sound.ctx && Sound.ctx.state === 'running')) {
+      const menuPaused = Sound.menuTrack?.paused ?? true;
+      const gamePaused = Sound.gameTrack?.paused ?? true;
+      if (!menuPaused || !gamePaused || (Sound.ctx && Sound.ctx.state === 'running')) {
         window.removeEventListener('click', unlockAudio);
         window.removeEventListener('touchstart', unlockAudio);
         window.removeEventListener('keydown', unlockAudio);
@@ -283,71 +307,77 @@ function App() {
     Sound.playGameMusic(); // שימוש בפונקציה החדשה
     setGameState('PLAYING');
     setIsPaused(false);
-    
-    requestAnimationFrame((time) => {
-        if(canvasRef.current) {
-            const vp = getViewportSize();
-            // הגבל רזולוציה למניעת ביצועים איטיים במחשבים עם מסכים גדולים
-            const maxCanvasWidth = isMobile ? vp.w : Math.min(vp.w, 1920);
-            const maxCanvasHeight = isMobile ? vp.h : Math.min(vp.h, 1080);
 
-            canvasRef.current.width = maxCanvasWidth;
-            canvasRef.current.height = maxCanvasHeight;
+    if (canvasRef.current) {
+      const vp = getViewportSize();
+      // הגבל רזולוציה למניעת ביצועים איטיים במחשבים עם מסכים גדולים
+      const maxCanvasWidth = isMobile ? vp.w : Math.min(vp.w, 1920);
+      const maxCanvasHeight = isMobile ? vp.h : Math.min(vp.h, 1080);
 
-            // התאם את גודל הקנבס ב-CSS להצגה מלאה
-            canvasRef.current.style.width = vp.w + 'px';
-            canvasRef.current.style.height = vp.h + 'px';
+      canvasRef.current.width = maxCanvasWidth;
+      canvasRef.current.height = maxCanvasHeight;
 
-            engineRef.current = new GameEngine(
-                canvasRef.current,
-                { 
-                  ...config, 
-                  skin: inventory.currentSkin, 
-                  location: sugia?.location || 'nehardea',
-                  modifier: sugia?.modifier || 'wave',
-                  sugiaTitle: sugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא'),
-                  customDictionary: dictionaryToUse,
-                  isTeacherPractice: !!customWordList
-                },
-                { bombs: inventory.bombs, shields: inventory.shields, potions: inventory.potions },
-                {
-                    onStatsUpdate: (s: any) => {
-                        setStats(prev => {
-                            const newStats = {...prev, ...s};
-                            if (newStats.level > maxLevelReached) {
-                              setMaxLevelReached(newStats.level);
-                              localStorage.setItem('maxLevel', newStats.level.toString());
-                            }
-                            return newStats;
-                        });
-                    },
-                    onGameOver: (finalScore: number) => {
-                        if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
-                        setGameState('GAMEOVER');
-                        Sound.playMenuMusic(); // חזרה למוזיקת תפריט
-                        const earned = Math.floor(finalScore / 20);
-                        const newCoins = coins + earned;
-                        setCoins(newCoins);
-                        localStorage.setItem('coins', newCoins.toString());
-                    },
-                    onFeedback: (msg: string, isGood: boolean) => {
-                        setFeedback({msg, isGood});
-                        setTimeout(() => setFeedback(null), 1200);
-                    },
-                    onAchievement: (id: string) => {
-                        unlockAchievement(id);
-                    },
-                    onUnitComplete: (s: any) => {
-                        setTransitionStats(s);
-                        setIsUnitComplete(true);
-                        Sound.play('powerup');
-                    }
-                }
-            );
-            lastTimeRef.current = time;
-            animationFrameId.current = requestAnimationFrame(gameLoop);
-        }
-    });
+      // התאם את גודל הקנבס ב-CSS להצגה מלאה
+      canvasRef.current.style.width = vp.w + 'px';
+      canvasRef.current.style.height = vp.h + 'px';
+
+      // Clear stale frame immediately (prevents "previous ship for a moment")
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+
+      engineRef.current = new GameEngine(
+          canvasRef.current,
+          { 
+            ...config, 
+            skin: inventory.currentSkin, 
+            location: sugia?.location || 'nehardea',
+            modifier: sugia?.modifier || 'wave',
+            sugiaTitle: sugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא'),
+            customDictionary: dictionaryToUse,
+            isTeacherPractice: !!customWordList
+          },
+          { bombs: inventory.bombs, shields: inventory.shields, potions: inventory.potions },
+          {
+              onStatsUpdate: (s: any) => {
+                  setStats(prev => {
+                      const newStats = {...prev, ...s};
+                      if (newStats.level > maxLevelReached) {
+                        setMaxLevelReached(newStats.level);
+                        localStorage.setItem('maxLevel', newStats.level.toString());
+                      }
+                      return newStats;
+                  });
+              },
+              onGameOver: (finalScore: number) => {
+                  if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
+                  setGameState('GAMEOVER');
+                  Sound.playMenuMusic(); // חזרה למוזיקת תפריט
+                  const earned = Math.floor(finalScore / 20);
+                  const newCoins = coins + earned;
+                  setCoins(newCoins);
+                  localStorage.setItem('coins', newCoins.toString());
+              },
+              onFeedback: (msg: string, isGood: boolean) => {
+                  setFeedback({msg, isGood});
+                  setTimeout(() => setFeedback(null), 1200);
+              },
+              onAchievement: (id: string) => {
+                  unlockAchievement(id);
+              },
+              onUnitComplete: (s: any) => {
+                  setTransitionStats(s);
+                  setIsUnitComplete(true);
+                  Sound.play('powerup');
+              }
+          }
+      );
+      lastTimeRef.current = performance.now();
+      animationFrameId.current = requestAnimationFrame(gameLoop);
+    }
   };
 
   const proceedToNextSugia = () => {
@@ -597,13 +627,18 @@ const equipSkin = (id: string) => {
       )}
       
       {unlockNotification && (
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[200] animate-bounce-slow pointer-events-none w-full max-w-sm px-4">
-          <div className="bg-gradient-to-r from-amber-600 to-yellow-400 p-1 rounded-2xl shadow-2xl">
-            <div className="bg-slate-900 rounded-xl px-4 py-3 md:px-8 md:py-4 flex items-center gap-4 md:gap-6 border border-amber-400/30">
-              <span className="text-3xl md:text-5xl">{unlockNotification.icon}</span>
+        <div
+          className={`absolute left-1/2 -translate-x-1/2 z-[200] pointer-events-none w-full ${
+            isMobile ? 'bottom-0 animate-fade-in max-w-[18rem] px-3' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
+          }`}
+          style={isMobile ? ({ bottom: 'calc(env(safe-area-inset-bottom) + 118px)' } as any) : undefined}
+        >
+          <div className="rk-glass-strong rk-glow border border-amber-400/20 rounded-2xl overflow-hidden">
+            <div className="px-3 py-2 md:px-8 md:py-4 flex items-center gap-3 md:gap-6">
+              <span className={`${isMobile ? 'text-xl' : 'text-3xl md:text-5xl'}`}>{unlockNotification.icon}</span>
               <div className="text-right">
-                <div className="text-amber-400 font-black text-xs md:text-sm uppercase tracking-widest">הישג חדש!</div>
-                <div className="text-white font-black text-lg md:text-2xl">{unlockNotification.title}</div>
+                <div className={`text-amber-400 font-black uppercase tracking-widest ${isMobile ? 'text-[9px]' : 'text-xs md:text-sm'}`}>הישג חדש!</div>
+                <div className={`text-white font-black leading-tight ${isMobile ? 'text-[13px]' : 'text-lg md:text-2xl'}`}>{unlockNotification.title}</div>
               </div>
             </div>
           </div>
@@ -613,28 +648,43 @@ const equipSkin = (id: string) => {
       {gameState === 'PLAYING' && (
         <div className="absolute inset-0 pointer-events-none rk-safe-overlay flex flex-col justify-between">
             <div className="flex justify-between items-start gap-2" data-ui="true">
-                <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-2 md:p-4 min-w-[132px] md:min-w-[220px]">
+                <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-1.5 md:p-4 min-w-[96px] sm:min-w-[120px] md:min-w-[220px]">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-amber-400 font-black text-lg md:text-2xl flex items-center gap-1 md:gap-2 leading-none">
-                        <GoldCoin size={18} /> {displayScore.toLocaleString()}
+                      <div className={`text-amber-400 font-black flex items-center gap-1 md:gap-2 leading-none tabular-nums ${isMobile ? 'text-[14px]' : 'text-lg md:text-2xl'}`}>
+                        {!isMobile && <GoldCoin size={18} />} {displayScore.toLocaleString()}
                       </div>
                       <div className="text-right">
-                        <div className="rk-hud-label">יחידה {stats.level}</div>
-                        <div className="rk-hud-label">שלב {stats.subLevel}/9</div>
+                        {isMobile ? (
+                          <div className="rk-hud-label text-[8px]">יחידה {stats.level} • {stats.subLevel}/9</div>
+                        ) : (
+                          <>
+                            <div className="rk-hud-label">יחידה {stats.level}</div>
+                            <div className="rk-hud-label">שלב {stats.subLevel}/9</div>
+                          </>
+                        )}
                       </div>
                     </div>
-                    <div className="mt-2 text-slate-200 text-[10px] md:text-xs font-bold uppercase tracking-widest truncate">{stats.sugiaTitle}</div>
+                    {!isMobile && (
+                      <div className="mt-2 text-slate-200 text-[10px] md:text-xs font-bold uppercase tracking-widest truncate">{stats.sugiaTitle}</div>
+                    )}
 
                     {stats.weaponAmmo && stats.weaponAmmo > 0 && stats.weaponAmmo < 9000 && (
-                      <div className="mt-2">
-                        <div className="flex items-center justify-between">
-                          <span className="rk-hud-label">Ammo</span>
-                          <span className="text-blue-200 font-black text-xs md:text-sm">{stats.weaponAmmo}/30</span>
+                      isMobile ? (
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className="rk-hud-label text-[8px]">Ammo</span>
+                          <span className="text-blue-200 font-black text-[11px] tabular-nums">{stats.weaponAmmo}</span>
                         </div>
-                        <div className="rk-ammo-bar mt-1">
-                          <div className="rk-ammo-fill" style={{ ['--pct' as any]: `${Math.max(0, Math.min(100, Math.round((stats.weaponAmmo / 30) * 100)))}%` } as any} />
+                      ) : (
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between">
+                            <span className="rk-hud-label">Ammo</span>
+                            <span className="text-blue-200 font-black text-xs md:text-sm">{stats.weaponAmmo}/30</span>
+                          </div>
+                          <div className="rk-ammo-bar mt-1">
+                            <div className="rk-ammo-fill" style={{ ['--pct' as any]: `${Math.max(0, Math.min(100, Math.round((stats.weaponAmmo / 30) * 100)))}%` } as any} />
+                          </div>
                         </div>
-                      </div>
+                      )
                     )}
                 </div>
                 
@@ -661,16 +711,26 @@ const equipSkin = (id: string) => {
                     )}
                 </div>
 
-                <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-2 md:p-4 min-w-[120px] md:min-w-[220px]">
-                    <div className="flex items-center justify-between">
-                      <div className="rk-hud-label">Hull</div>
-                      <div className="text-slate-200 font-black text-xs md:text-sm">{Math.max(0, stats.lives)}/5</div>
-                    </div>
-                    <div className="mt-2 rk-segbar" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <div key={i} className={`rk-seg ${i < Math.max(0, stats.lives) ? 'is-on' : ''}`} />
-                      ))}
-                    </div>
+                <div className="flex flex-col md:flex-row items-end md:items-start gap-2">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (engineRef.current) { const paused = engineRef.current.togglePause(); setIsPaused(paused); Sound.play('ui_click'); } }}
+                    className="pointer-events-auto rk-hud-panel w-11 h-11 md:w-14 md:h-14 rounded-full flex items-center justify-center border border-blue-400/25 active:scale-90"
+                    aria-label="עצור/המשך"
+                    data-ui="true"
+                  >
+                    <PauseBarsIcon className="w-5 h-5 md:w-6 md:h-6 text-slate-100" />
+                  </button>
+                  <div className="rk-hud-panel rounded-2xl md:rounded-3xl p-1.5 md:p-4 min-w-[104px] md:min-w-[220px]">
+                      <div className="flex items-center justify-between">
+                        <div className="rk-hud-label">Hull</div>
+                        <div className="text-slate-200 font-black text-[11px] md:text-sm tabular-nums">{Math.max(0, stats.lives)}/5</div>
+                      </div>
+                      <div className="mt-2 rk-segbar" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+                        {Array.from({ length: 5 }).map((_, i) => (
+                          <div key={i} className={`rk-seg ${i < Math.max(0, stats.lives) ? 'is-on' : ''}`} />
+                        ))}
+                      </div>
+                  </div>
                 </div>
             </div>
 
@@ -686,15 +746,11 @@ const equipSkin = (id: string) => {
                       <button 
                         onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); isInputOnUI.current = true; engineRef.current?.fire(); }}
                         onPointerUp={(e) => { isInputOnUI.current = false; }}
-                        className="rk-hud-panel w-16 h-16 rounded-full border border-red-400/40 flex items-center justify-center text-3xl shadow-[0_0_40px_rgba(239,68,68,0.16)] active:scale-90"
+                        className="rk-hud-panel w-16 h-16 rounded-full border border-red-400/40 flex items-center justify-center shadow-[0_0_40px_rgba(239,68,68,0.16)] active:scale-90"
                       >
-                        🔥
+                        <FlameIcon className="w-9 h-9 text-red-200" />
                       </button>
                     )}
-                    <button onClick={(e) => { e.stopPropagation(); if (engineRef.current) { const paused = engineRef.current.togglePause(); setIsPaused(paused); Sound.play('ui_click'); } }}
-                       className="rk-hud-panel pointer-events-auto w-14 h-14 rounded-full flex items-center justify-center text-2xl border border-blue-400/25 active:scale-90 mb-2 md:mb-0">
-                       ⏸️
-                    </button>
                 </div>
             </div>
 
@@ -1046,16 +1102,20 @@ const equipSkin = (id: string) => {
                           return (
                               <div key={sugia.id} className="relative group flex flex-col items-center">
                                   {idx < SUGIOT.length - 1 && (
-                                    <div className={`absolute top-12 md:top-24 left-[5rem] md:left-[10rem] w-8 md:w-20 h-1 rounded-full
+                                    <div className={`absolute top-14 md:top-24 left-[5rem] md:left-[10rem] w-8 md:w-20 h-1 rounded-full
                                       ${customWordList || maxLevelReached >= SUGIOT[idx+1].requiredLevel ? 'bg-gradient-to-r from-blue-500/70 to-amber-400/70' : 'bg-slate-700/30'}
                                     `}></div>
                                   )}
                                   <div onClick={() => { if(isUnlocked) { Sound.play('ui_click'); setSelectedSugia(sugia); } }}
-                                      className={`w-20 h-24 md:w-36 md:h-48 rounded-2xl border flex flex-col items-center justify-center text-xl md:text-4xl font-aramaic transition-all cursor-pointer relative
+                                      className={`w-24 h-28 md:w-36 md:h-48 rounded-2xl border flex flex-col items-center justify-center font-aramaic transition-all cursor-pointer relative
                                           ${isUnlocked ? (isSelected ? 'rk-glass-strong border-amber-400/40 scale-110 -translate-y-2 md:-translate-y-4 ring-4 ring-amber-400/15' : 'rk-glass border-blue-400/20 hover:border-amber-400/25 hover:scale-105') : 'rk-glass border-slate-700/30 grayscale opacity-40 cursor-not-allowed'}`}>
-                                      <div className="rk-hud-label absolute top-2 right-2">סוגיא {idx+1}</div>
-                                      <div className={`font-black mb-1 md:mb-2 ${isUnlocked ? 'rk-neon-title' : 'text-slate-400'}`}>
-                                        {isUnlocked ? String.fromCharCode(0x5D0 + (idx % 22)) : '🔒'}
+                                      <div className="rk-hud-label absolute top-2 right-2 text-[8px] md:text-[10px]">סוגיא {idx+1}</div>
+                                      <div className={`font-aramaic font-black leading-none mb-1 md:mb-2 ${isUnlocked ? 'rk-neon-title' : 'text-slate-300/70'} text-4xl md:text-6xl`}>
+                                        {isUnlocked ? (
+                                          <span>{String.fromCharCode(0x5D0 + (idx % 22))}</span>
+                                        ) : (
+                                          <LockIcon className="w-9 h-9 md:w-12 md:h-12" />
+                                        )}
                                       </div>
                                       <div className="text-slate-300/80 text-[8px] md:text-[10px] font-bold tracking-widest uppercase">{dafLabel}</div>
                                   </div>
@@ -1377,6 +1437,73 @@ const MenuIcon = ({ name, className = '' }: { name: MenuIconName; className?: st
       return null;
   }
 };
+
+const LockIcon = ({ className = '' }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <path
+      d="M7 11V8a5 5 0 0 1 10 0v3"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <rect
+      x="6"
+      y="11"
+      width="12"
+      height="10"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="2"
+    />
+    <path
+      d="M12 15v3"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
+const PauseBarsIcon = ({ className = '' }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <path d="M9 6v12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    <path d="M15 6v12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+  </svg>
+);
+
+const FlameIcon = ({ className = '' }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <path
+      d="M12 2c1.8 3.6-.8 5.4-1 7.8-.2 2.5 1.7 3.1 2.6 4.8 1.1 2.1.3 5.4-3 6.9C7.4 22.9 4 20.4 4 16.4c0-3.7 2.3-6.2 5.2-8.9.9-.8 1.9-1.7 2.8-2.8z"
+      fill="currentColor"
+      opacity="0.92"
+    />
+    <path
+      d="M12.4 10.1c.7 1.6-.2 2.5-.3 3.6-.1 1.1.7 1.6 1.1 2.3.6 1.1.2 2.7-1.6 3.4-1.7.7-3.4-.5-3.4-2.5 0-1.8 1.2-3 2.2-4 .7-.7 1.3-1.3 2-2.8z"
+      fill="white"
+      opacity="0.18"
+    />
+  </svg>
+);
 
 type BackdropMode = 'menu' | 'default';
 
