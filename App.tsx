@@ -995,15 +995,17 @@ const equipSkin = (id: string) => {
       {unlockNotification && (
         <div
           className={`absolute left-1/2 -translate-x-1/2 z-[200] pointer-events-none w-full ${
-            isMobile ? 'top-1/2 -translate-y-1/2 animate-fade-in max-w-[20rem] px-4' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
+            isMobile 
+              ? 'bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] animate-fade-in max-w-[16rem] px-3' 
+              : 'bottom-10 animate-bounce-slow max-w-sm px-4'
           }`}
         >
-          <div className="rk-glass-strong rk-glow border border-amber-400/20 rounded-2xl overflow-hidden">
-            <div className="px-3 py-2 md:px-8 md:py-4 flex items-center gap-3 md:gap-6">
-              <span className={`${isMobile ? 'text-xl' : 'text-3xl md:text-5xl'}`}>{unlockNotification.icon}</span>
-              <div className="text-right">
-                <div className={`text-amber-400 font-black uppercase tracking-widest ${isMobile ? 'text-[9px]' : 'text-xs md:text-sm'}`}>הישג חדש!</div>
-                <div className={`text-white font-black leading-tight ${isMobile ? 'text-[13px]' : 'text-lg md:text-2xl'}`}>{unlockNotification.title}</div>
+          <div className="rk-glass-strong rk-glow border border-amber-400/20 rounded-xl overflow-hidden">
+            <div className={`flex items-center gap-2 md:gap-6 ${isMobile ? 'px-2 py-1.5' : 'px-3 py-2 md:px-8 md:py-4'}`}>
+              <span className={`${isMobile ? 'text-base' : 'text-3xl md:text-5xl'}`}>{unlockNotification.icon}</span>
+              <div className="text-right flex-1">
+                <div className={`text-amber-400 font-black uppercase tracking-widest ${isMobile ? 'text-[8px]' : 'text-xs md:text-sm'}`}>הישג חדש!</div>
+                <div className={`text-white font-black leading-tight ${isMobile ? 'text-[11px]' : 'text-lg md:text-2xl'}`}>{unlockNotification.title}</div>
               </div>
             </div>
           </div>
@@ -1911,47 +1913,103 @@ const FlameIcon = ({ className = '' }: { className?: string }) => (
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
   >
-    {/* Main flame body - orange/red gradient */}
     <defs>
-      <linearGradient id="flameGrad" x1="12" y1="2" x2="12" y2="20">
-        <stop offset="0%" stopColor="#FFD700" />
-        <stop offset="30%" stopColor="#FF8C00" />
-        <stop offset="60%" stopColor="#FF4500" />
-        <stop offset="100%" stopColor="#DC143C" />
+      {/* Main flame gradient - vibrant orange to deep red */}
+      <linearGradient id="flameGradMain" x1="12" y1="0" x2="12" y2="24">
+        <stop offset="0%" stopColor="#FFF9C4" />
+        <stop offset="15%" stopColor="#FFE082" />
+        <stop offset="35%" stopColor="#FFB74D" />
+        <stop offset="55%" stopColor="#FF8A65" />
+        <stop offset="75%" stopColor="#FF6B35" />
+        <stop offset="100%" stopColor="#E53935" />
       </linearGradient>
-      <linearGradient id="flameInner" x1="12" y1="6" x2="12" y2="16">
-        <stop offset="0%" stopColor="#FFFFFF" />
-        <stop offset="50%" stopColor="#FFD700" />
-        <stop offset="100%" stopColor="#FF8C00" />
-      </linearGradient>
+      {/* Inner bright core */}
+      <radialGradient id="flameCore" cx="12" cy="8" r="4">
+        <stop offset="0%" stopColor="#FFFFFF" stopOpacity="1" />
+        <stop offset="50%" stopColor="#FFE082" stopOpacity="0.9" />
+        <stop offset="100%" stopColor="#FFB74D" stopOpacity="0.6" />
+      </radialGradient>
+      {/* Outer glow */}
+      <radialGradient id="flameGlow" cx="12" cy="10" r="8">
+        <stop offset="0%" stopColor="#FFE082" stopOpacity="0.4" />
+        <stop offset="100%" stopColor="#E53935" stopOpacity="0" />
+      </radialGradient>
     </defs>
-    {/* Outer flame - left tongue */}
+    
+    {/* Outer glow effect */}
+    <ellipse cx="12" cy="10" rx="7" ry="9" fill="url(#flameGlow)" />
+    
+    {/* Left flame tongue - dynamic and wavy */}
     <path
-      d="M10 4 Q8 8 9 12 Q9.5 16 11 18 Q12 19 12 20 L12 22 Q12 20 12 18 Q11 16 10 14 Q9 10 10 6 Z"
-      fill="url(#flameGrad)"
+      d="M9 3 
+         Q7 6, 7.5 9
+         Q7 12, 8 15
+         Q8.5 17, 10 18.5
+         Q11 19.5, 12 20
+         L12 22
+         Q11.5 20.5, 10.5 19
+         Q9.5 17, 9 14.5
+         Q8.5 11, 9 8
+         Q9.5 5, 10 3.5
+         Z"
+      fill="url(#flameGradMain)"
       opacity="0.95"
     />
-    {/* Outer flame - right tongue */}
+    
+    {/* Right flame tongue */}
     <path
-      d="M14 4 Q16 8 15 12 Q14.5 16 13 18 Q12 19 12 20 L12 22 Q12 20 12 18 Q13 16 14 14 Q15 10 14 6 Z"
-      fill="url(#flameGrad)"
+      d="M15 3 
+         Q17 6, 16.5 9
+         Q17 12, 16 15
+         Q15.5 17, 14 18.5
+         Q13 19.5, 12 20
+         L12 22
+         Q12.5 20.5, 13.5 19
+         Q14.5 17, 15 14.5
+         Q15.5 11, 15 8
+         Q14.5 5, 14 3.5
+         Z"
+      fill="url(#flameGradMain)"
       opacity="0.95"
     />
-    {/* Center flame - main body */}
+    
+    {/* Center main flame body - tallest and most prominent */}
     <path
-      d="M12 2 Q11 6 11.5 10 Q12 14 12 18 Q12 20 12 22 L12 20 Q12 18 12.5 14 Q13 10 13 6 Q12.5 4 12 2 Z"
-      fill="url(#flameGrad)"
-      opacity="0.98"
+      d="M12 1
+         Q11 4, 11.2 7
+         Q11.5 10, 11.8 13
+         Q12 16, 12 19
+         Q12 21, 12 22
+         L12 20
+         Q12 18, 12.2 15
+         Q12.5 12, 12.8 9
+         Q13 6, 13 3.5
+         Q12.5 2, 12 1
+         Z"
+      fill="url(#flameGradMain)"
+      opacity="1"
     />
-    {/* Inner bright core */}
+    
+    {/* Bright inner core */}
+    <ellipse cx="12" cy="7" rx="2.5" ry="5" fill="url(#flameCore)" />
+    
+    {/* Small flickering flames on the sides for detail */}
     <path
-      d="M12 6 Q11.5 9 12 12 Q12.5 15 12 18 Q12 16 12 14 Q12 10 12.5 8 Q12.2 7 12 6 Z"
-      fill="url(#flameInner)"
-      opacity="0.85"
+      d="M8.5 6 Q8 7.5 8.5 9 Q9 10.5 9.5 9 Q10 7.5 9.5 6 Q9 4.5 8.5 6 Z"
+      fill="#FFE082"
+      opacity="0.8"
     />
-    {/* Small flicker flames on sides */}
-    <ellipse cx="9.5" cy="8" rx="1.5" ry="3" fill="#FFD700" opacity="0.7" />
-    <ellipse cx="14.5" cy="8" rx="1.5" ry="3" fill="#FFD700" opacity="0.7" />
+    <path
+      d="M15.5 6 Q15 7.5 15.5 9 Q16 10.5 16.5 9 Q17 7.5 16.5 6 Q16 4.5 15.5 6 Z"
+      fill="#FFE082"
+      opacity="0.8"
+    />
+    
+    {/* Extra small sparks */}
+    <circle cx="10" cy="5" r="0.8" fill="#FFFFFF" opacity="0.9" />
+    <circle cx="14" cy="5" r="0.8" fill="#FFFFFF" opacity="0.9" />
+    <circle cx="11.5" cy="4" r="0.6" fill="#FFE082" opacity="0.8" />
+    <circle cx="12.5" cy="4" r="0.6" fill="#FFE082" opacity="0.8" />
   </svg>
 );
 
