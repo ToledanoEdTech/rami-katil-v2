@@ -160,8 +160,18 @@ function App() {
   useEffect(() => {
     fetchData();
     Sound.init();
-    const checkMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    setIsMobile(checkMobile);
+    const checkMobileByUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const checkMobileByWidth = window.innerWidth < 768; // גם מזהה לפי רוחב מסך
+    setIsMobile(checkMobileByUA || checkMobileByWidth);
+    
+    // עדכון דינמי כשהחלון משנה גודל
+    const handleResize = () => {
+      const isMobileNow = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+      setIsMobile(isMobileNow);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
 
     // Preload ship + item images to avoid first-frame flicker when starting a game
     try {
@@ -739,7 +749,7 @@ const equipSkin = (id: string) => {
               key={currentImageIndex}
               src={INTRO_IMAGES[currentImageIndex]}
               alt={`Intro ${currentImageIndex + 1}`}
-              className="w-full h-full object-cover"
+              className={`w-full h-full ${isMobile ? 'object-contain' : 'object-cover'}`}
               style={{ 
                 animation: 'fadeIn 0.5s ease-in',
                 display: 'block'
@@ -899,9 +909,33 @@ const equipSkin = (id: string) => {
                       <button 
                         onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); isInputOnUI.current = true; engineRef.current?.fire(); }}
                         onPointerUp={(e) => { isInputOnUI.current = false; }}
-                        className="rk-hud-panel w-16 h-16 rounded-full border border-red-400/40 flex items-center justify-center shadow-[0_0_40px_rgba(239,68,68,0.16)] active:scale-90"
+                        className="relative w-20 h-20 rounded-full flex items-center justify-center active:scale-95 transition-transform duration-150"
+                        style={{
+                          background: 'radial-gradient(circle, rgba(251,146,60,0.9) 0%, rgba(239,68,68,0.85) 40%, rgba(185,28,28,0.8) 100%)',
+                          boxShadow: `
+                            0 0 20px rgba(251,146,60,0.6),
+                            0 0 40px rgba(239,68,68,0.4),
+                            0 0 60px rgba(185,28,28,0.3),
+                            inset 0 0 20px rgba(255,255,255,0.1)
+                          `,
+                          border: '2px solid rgba(251,191,36,0.5)'
+                        }}
                       >
-                        <FlameIcon className="w-9 h-9 text-red-200" />
+                        <div 
+                          className="absolute inset-0 rounded-full"
+                          style={{
+                            background: 'radial-gradient(circle, rgba(251,146,60,0.4) 0%, transparent 70%)',
+                            animation: 'rk-flame-flicker 1.2s ease-in-out infinite'
+                          }}
+                        />
+                        <FlameIcon 
+                          className="relative z-10 w-12 h-12" 
+                          style={{ 
+                            color: '#FEF3C7', 
+                            filter: 'drop-shadow(0 0 8px rgba(251,146,60,0.8))',
+                            animation: 'rk-flame-flicker 1.5s ease-in-out infinite'
+                          }} 
+                        />
                       </button>
                     )}
                 </div>
@@ -1358,7 +1392,7 @@ const equipSkin = (id: string) => {
                             <div className={`${isMobile ? 'p-1' : 'p-4 md:p-6'} flex flex-col h-full`}>
                               <div className={`flex items-center justify-between ${isMobile ? 'gap-0.5 mb-0.5' : 'gap-3'}`}>
                                 <div className={`rk-hud-label ${isMobile ? 'text-[6px]' : ''}`}>{item.type === 'skin' ? 'Skin' : 'Module'}</div>
-                                <div className={`rk-shop-badge ${isMobile ? 'text-[6px] px-0.5 py-0' : ''} ${
+                                <div className={`rk-shop-badge ${isMobile ? 'text-[9px] px-1.5 py-0.5' : ''} ${
                                   badge.kind === 'price' ? 'is-price' :
                                   badge.kind === 'owned' ? 'is-owned' :
                                   badge.kind === 'equipped' ? 'is-equipped' : 'is-locked'
@@ -1401,11 +1435,11 @@ const equipSkin = (id: string) => {
                                 </div>
                               </div>
 
-                              <h3 className={`${isMobile ? 'mt-0.5 text-[8px]' : 'mt-4 text-lg md:text-3xl'} font-black text-white leading-tight`}>{item.name}</h3>
-                              <p className={`${isMobile ? 'mt-0 text-[7px] line-clamp-2' : 'mt-1 text-sm md:text-base line-clamp-3'} text-slate-300/85 leading-tight flex-1`}>{item.desc}</p>
+                              <h3 className={`${isMobile ? 'mt-0.5 text-sm' : 'mt-4 text-lg md:text-3xl'} font-black text-white leading-tight`}>{item.name}</h3>
+                              <p className={`${isMobile ? 'mt-0 text-xs line-clamp-2' : 'mt-1 text-sm md:text-base line-clamp-3'} text-slate-300/85 leading-tight flex-1`}>{item.desc}</p>
 
                               <div className={`${isMobile ? 'mt-0.5' : 'mt-5'}`}>
-                                <div className={`rk-shop-cta ${isMobile ? 'text-[7px] py-0.5 px-1' : ''} ${
+                                <div className={`rk-shop-cta ${isMobile ? 'text-xs py-2 px-3' : ''} ${
                                   cta.kind === 'buy' ? 'is-buy' :
                                   cta.kind === 'select' ? 'is-select' :
                                   cta.kind === 'equipped' ? 'is-equipped' : 'is-locked'
@@ -1413,7 +1447,7 @@ const equipSkin = (id: string) => {
                                   {cta.text}
                                 </div>
                                 {locked && requiredTitle && (
-                                  <div className={`${isMobile ? 'mt-0 text-[6px]' : 'mt-2 text-xs md:text-sm'} text-center font-bold text-slate-200/80`}>
+                                  <div className={`${isMobile ? 'mt-0 text-[9px]' : 'mt-2 text-xs md:text-sm'} text-center font-bold text-slate-200/80`}>
                                     דרוש: <span className="text-amber-300">{requiredTitle}</span>
                                   </div>
                                 )}

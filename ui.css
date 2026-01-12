@@ -655,6 +655,29 @@
   50% { transform: translateY(-6px); }
 }
 
+@keyframes rk-flame-flicker {
+  0%, 100% { 
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  25% { 
+    opacity: 0.9;
+    transform: scale(1.05);
+    filter: brightness(1.2);
+  }
+  50% { 
+    opacity: 0.95;
+    transform: scale(0.98);
+    filter: brightness(0.9);
+  }
+  75% { 
+    opacity: 0.92;
+    transform: scale(1.02);
+    filter: brightness(1.1);
+  }
+}
+
 .animate-fade-in { animation: rk-fade-in 260ms ease-out both; }
 .animate-slide-up { animation: rk-slide-up 260ms ease-out both; }
 .animate-bounce-slow { animation: rk-bounce-slow 2.2s ease-in-out infinite; }
