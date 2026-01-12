@@ -127,42 +127,109 @@
 
 /* Buttons (Glassmorphism) */
 .rk-btn {
+  /* Base “prominent” button — shared across all menus */
+  --rk-btn-bg: linear-gradient(180deg, rgba(2, 6, 23, 0.58), rgba(2, 6, 23, 0.34));
+  --rk-btn-border: linear-gradient(135deg, rgba(59, 130, 246, 0.52), rgba(88, 28, 135, 0.40), rgba(251, 191, 36, 0.22));
+  --rk-btn-glow: 0 18px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(251, 191, 36, 0.14), 0 0 42px rgba(59, 130, 246, 0.18), 0 0 60px rgba(88, 28, 135, 0.12);
+  --rk-btn-glow-hover: 0 22px 78px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(251, 191, 36, 0.18), 0 0 64px rgba(59, 130, 246, 0.22), 0 0 84px rgba(88, 28, 135, 0.16);
+  --rk-btn-text: rgba(255, 255, 255, 0.96);
+  --rk-btn-text-shadow: 0 0 18px rgba(59, 130, 246, 0.18), 0 0 20px rgba(251, 191, 36, 0.10);
+
   position: relative;
+  isolation: isolate;
   border-radius: 1.25rem;
   padding: 0.95rem 1.1rem;
   font-weight: 900;
   letter-spacing: 0.02em;
-  background: rgba(2, 6, 23, 0.38);
-  border: 1px solid rgba(59, 130, 246, 0.28);
+  color: var(--rk-btn-text);
+  background:
+    var(--rk-btn-bg) padding-box,
+    var(--rk-btn-border) border-box;
+  border: 1px solid transparent;
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(251, 191, 36, 0.10), 0 0 30px rgba(59, 130, 246, 0.14);
-  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
+  box-shadow: var(--rk-btn-glow);
+  text-shadow: var(--rk-btn-text-shadow);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease, background 160ms ease;
 }
 
-.rk-btn:hover {
-  transform: translateY(-1px) scale(1.01);
-  border-color: rgba(251, 191, 36, 0.35);
-  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(59, 130, 246, 0.22), 0 0 44px rgba(59, 130, 246, 0.18), 0 0 52px rgba(88, 28, 135, 0.14);
+.rk-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(140px 60px at 22% 18%, rgba(255, 255, 255, 0.20), transparent 62%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 38%, rgba(255, 255, 255, 0.04));
+  opacity: 0.38;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rk-btn:hover {
+    transform: translateY(-2px) scale(1.015);
+    box-shadow: var(--rk-btn-glow-hover);
+    filter: saturate(1.06) brightness(1.03);
+  }
+
+  .rk-btn:hover::after {
+    opacity: 0.62;
+    transform: translateY(-1px);
+  }
 }
 
 .rk-btn:active {
-  transform: translateY(1px) scale(0.99);
+  transform: translateY(0px) scale(0.995);
+  filter: saturate(1.02) brightness(0.99);
+}
+
+.rk-btn:active::after {
+  opacity: 0.30;
+  transform: none;
+}
+
+.rk-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(2, 6, 23, 0.75),
+    0 0 0 6px rgba(59, 130, 246, 0.30),
+    var(--rk-btn-glow-hover);
+}
+
+.rk-btn:disabled,
+.rk-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: grayscale(0.25);
+  transform: none;
 }
 
 .rk-btn-primary {
-  border-color: rgba(251, 191, 36, 0.35);
-  background: linear-gradient(135deg, rgba(251, 191, 36, 0.20), rgba(59, 130, 246, 0.14), rgba(88, 28, 135, 0.18));
+  --rk-btn-bg: linear-gradient(135deg, rgba(251, 191, 36, 0.26), rgba(59, 130, 246, 0.18), rgba(88, 28, 135, 0.20));
+  --rk-btn-border: linear-gradient(135deg, rgba(251, 191, 36, 0.80), rgba(59, 130, 246, 0.56), rgba(168, 85, 247, 0.46));
+  --rk-btn-glow: 0 18px 62px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(251, 191, 36, 0.18), 0 0 54px rgba(251, 191, 36, 0.18), 0 0 50px rgba(59, 130, 246, 0.20);
+  --rk-btn-glow-hover: 0 24px 84px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(251, 191, 36, 0.22), 0 0 70px rgba(251, 191, 36, 0.22), 0 0 64px rgba(59, 130, 246, 0.24), 0 0 86px rgba(88, 28, 135, 0.18);
+  --rk-btn-text-shadow: 0 0 22px rgba(251, 191, 36, 0.18), 0 0 20px rgba(59, 130, 246, 0.14);
 }
 
 .rk-btn-muted {
-  border-color: rgba(148, 163, 184, 0.22);
-  color: rgba(226, 232, 240, 0.92);
+  --rk-btn-bg: linear-gradient(180deg, rgba(2, 6, 23, 0.56), rgba(2, 6, 23, 0.34));
+  --rk-btn-border: linear-gradient(135deg, rgba(148, 163, 184, 0.40), rgba(59, 130, 246, 0.24), rgba(148, 163, 184, 0.22));
+  --rk-btn-glow: 0 18px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(148, 163, 184, 0.14), 0 0 34px rgba(59, 130, 246, 0.14);
+  --rk-btn-glow-hover: 0 22px 74px rgba(0,  0, 0, 0.62), 0 0 0 1px rgba(148, 163, 184, 0.18), 0 0 52px rgba(59, 130, 246, 0.18);
+  --rk-btn-text: rgba(226, 232, 240, 0.95);
+  --rk-btn-text-shadow: 0 0 18px rgba(59, 130, 246, 0.16);
 }
 
 .rk-btn-danger {
-  border-color: rgba(239, 68, 68, 0.28);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 0 30px rgba(239, 68, 68, 0.14);
+  --rk-btn-bg: linear-gradient(180deg, rgba(20, 2, 6, 0.54), rgba(2, 6, 23, 0.34));
+  --rk-btn-border: linear-gradient(135deg, rgba(239, 68, 68, 0.70), rgba(251, 191, 36, 0.18), rgba(59, 130, 246, 0.12));
+  --rk-btn-glow: 0 18px 62px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(239, 68, 68, 0.16), 0 0 46px rgba(239, 68, 68, 0.18);
+  --rk-btn-glow-hover: 0 24px 84px rgba(0, 0, 0, 0.64), 0 0 0 1px rgba(239, 68, 68, 0.20), 0 0 68px rgba(239, 68, 68, 0.22);
 }
 
 /* Menu SVG icons */
@@ -571,6 +638,11 @@
 @keyframes rk-fade-in {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes rk-slide-up {

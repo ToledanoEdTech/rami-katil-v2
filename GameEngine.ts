@@ -1444,29 +1444,29 @@ export class GameEngine {
               for(let i=-2; i<=2; i++) this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: 3.5, vx: i * 1.8});
           } else if (this.level === 15) { // Shed
               const isHighRes = this.width > 1200;
-              const count = isHighRes ? 8 : 12; // Reduce from 12 to 8 on high-res
+              const count = isHighRes ? 6 : 8; // Reduce from 12 to 8, then 8 to 6 on high-res
               for(let i=0; i<count; i++) { const angle = (i/count) * Math.PI * 2; this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*4.5, vx: Math.cos(angle)*4.5}); }
           } else if (this.level === 22) { // Ashmedai - בוס קשה עם יריות מרובות
               const isHighRes = this.width > 1200;
-              const projectileCount = isHighRes ? 0.6 : 1; // Reduce projectiles on high-res
+              const projectileCount = isHighRes ? 0.7 : 1; // Reduce projectiles on high-res
 
-              // יריות מכוונות לשחקן (5 יריות -> 3 on high-res)
+              // יריות מכוונות לשחקן (3 יריות -> 2 on high-res)
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
-              const aimedCount = Math.floor(5 * projectileCount);
+              const aimedCount = Math.floor(3 * projectileCount);
               for(let i=0; i<aimedCount; i++) {
                 const offset = aimedCount > 1 ? (i - (aimedCount-1)/2) * 0.4 : 0;
                 this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+offset)*5, vx: Math.cos(ang+offset)*5});
               }
 
-              // יריות מעגליות (8 יריות -> 5 on high-res)
-              const circleCount = Math.floor(8 * projectileCount);
+              // יריות מעגליות (5 יריות -> 3 on high-res)
+              const circleCount = Math.floor(5 * projectileCount);
               for(let i=0; i<circleCount; i++) {
                 const angle = (i/circleCount) * Math.PI * 2;
                 this.bossProjectiles.push({x: b.x, y: b.y + 100, vy: Math.sin(angle)*5, vx: Math.cos(angle)*5});
               }
 
-              // יריות מתפזרות לצדדים (4 יריות -> 2 on high-res)
-              const spreadCount = Math.floor(4 * projectileCount);
+              // יריות מתפזרות לצדדים (2 יריות -> 1 on high-res)
+              const spreadCount = Math.floor(2 * projectileCount);
               for(let i=0; i<spreadCount; i++) {
                 const side = i % 2 === 0 ? -1 : 1;
                 this.bossProjectiles.push({x: b.x + side*80, y: b.y + 100, vy: 4.5, vx: side * 0.3});
@@ -1475,13 +1475,18 @@ export class GameEngine {
               const ang = Math.atan2(this.player.y - (b.y+100), this.player.x - b.x);
               for(let i=-1; i<=1; i++) this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang+i*0.2)*5, vx: Math.cos(ang+i*0.2)*5});
           } else if (this.level === 36) { // Leviathan
-              for(let i=0; i<10; i++) { const ang = (this.gameFrame*0.1) + (i/10)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
+              for(let i=0; i<7; i++) { const ang = (this.gameFrame*0.1) + (i/7)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4.5, vx: Math.cos(ang)*4.5}); }
           } else { // Ziz
               const isHighRes = this.width > 1200;
               const count = isHighRes ? 5 : 8; // Reduce from 8 to 5 on high-res
               for(let i=0; i<count; i++) { const ang = (this.gameFrame*0.1) + (i/count)*Math.PI*2; this.bossProjectiles.push({x: b.x, y: b.y+100, vy: Math.sin(ang)*4, vx: Math.cos(ang)*4}); }
           }
           Sound.play('shoot');
+      }
+
+      // Limit maximum projectiles to prevent performance issues
+      if (this.bossProjectiles.length > 50) {
+        this.bossProjectiles.splice(0, this.bossProjectiles.length - 50);
       }
 
       for (let i = this.bossProjectiles.length - 1; i >= 0; i--) {

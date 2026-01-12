@@ -39,7 +39,7 @@ export interface LeaderboardEntry {
   score: number;
 }
 
-export type GameState = 'MENU' | 'MAP' | 'PLAYING' | 'PAUSED' | 'SHOP' | 'LEADERBOARD' | 'GAMEOVER' | 'ACHIEVEMENTS' | 'TEACHER' | 'INSTRUCTIONS';
+export type GameState = 'INTRO' | 'MENU' | 'MAP' | 'PLAYING' | 'PAUSED' | 'SHOP' | 'LEADERBOARD' | 'GAMEOVER' | 'ACHIEVEMENTS' | 'TEACHER' | 'INSTRUCTIONS';
 
 export interface GameStats {
   score: number;

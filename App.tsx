@@ -31,8 +31,28 @@ const GoldCoin = ({ size = 24 }: { size?: number }) => (
   </svg>
 );
 
+// Intro Images - תמונות שרצות בפתיחה
+const INTRO_IMAGES: string[] = [
+  '/intro/1.png',
+  '/intro/2.png',
+  '/intro/3.png',
+  '/intro/4.png',
+  '/intro/5.png',
+];
+
+// Intro Texts - כיתובים לכל תמונה
+const INTRO_TEXTS: string[] = [
+  'בימים ההם, בזמן הזה... מלכות יוון הרשעה גזרה על ישראל להשכיחם תורתך.',
+  'הגווילים נשרפים והאותיות פורחות... שפת חכמינו בסכנת הכחדה.',
+  'אך במחשכים הוכן נשק המגן האחרון: מטוס קרב המונע בכוחה של תורה.',
+  'היכנס לתא הטייס! התחמושת שלך היא הידע. זהה את התרגום הנכון – ופגע.',
+  'הילחם בצבאות האויב, הבס את האויבים, והפוך ל\'רמי וקטיל\' – אלוף הארמית!',
+];
+
 function App() {
   const [gameState, setGameState] = useState<GameState>('MENU');
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [showIntroBeforeGame, setShowIntroBeforeGame] = useState(false);
   const [coins, setCoins] = useState(safeInt('coins', 0));
   const [isPaused, setIsPaused] = useState(false);
   const [displayScore, setDisplayScore] = useState(0);
@@ -155,7 +175,11 @@ function App() {
         'ships/skin_butzina.png', 'ships/butzina.png',
         'ships/torah.png', 'ships/choshen.png',
         // Items (shop)
-        'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png'
+        'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png',
+        // Logo
+        'logo.png',
+        // Intro images
+        ...INTRO_IMAGES.map(img => img.replace(/^\//, ''))
       ].forEach((p) => {
         const img = new Image();
         img.decoding = 'async';
@@ -286,27 +310,41 @@ function App() {
   }, []);
 
   const startGame = (sugia?: Sugia) => {
+    // Show intro before starting the game
+    setShowIntroBeforeGame(true);
+    setCurrentImageIndex(0);
+    setGameState('INTRO');
+    Sound.play('ui_click');
+    
+    // Store game config to start after intro
+    const dictionaryToUse = customWordList || fullDictionary.filter(w => w.cat === config.category);
+    (window as any).pendingGameConfig = { sugia, dictionaryToUse };
+  };
+
+  const actuallyStartGame = (sugia?: Sugia) => {
     if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
     engineRef.current = null;
     lastTimeRef.current = 0;
     setDisplayScore(0);
     setIsUnitComplete(false);
     
-    // Choose the dictionary to pass to the engine
-    const dictionaryToUse = customWordList || fullDictionary.filter(w => w.cat === config.category);
+    // Get stored config or use defaults
+    const storedConfig = (window as any).pendingGameConfig;
+    const dictionaryToUse = storedConfig?.dictionaryToUse || customWordList || fullDictionary.filter(w => w.cat === config.category);
+    const actualSugia = storedConfig?.sugia || sugia;
 
     setStats({
-        score: 0, level: sugia ? sugia.requiredLevel : 1, subLevel: 1, lives: 3, combo: 0, coins: 0, 
+        score: 0, level: actualSugia ? actualSugia.requiredLevel : 1, subLevel: 1, lives: 3, combo: 0, coins: 0, 
         bombs: inventory.bombs, shields: inventory.shields, potions: inventory.potions,
         hasShield: false, bossActive: false, bossHpPercent: 0, currentWord: 'מתחיל...', weaponAmmo: 0,
-        sugiaTitle: sugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא')
+        sugiaTitle: actualSugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא')
     });
     
     Sound.resume();
-    Sound.play('ui_click');
-    Sound.playGameMusic(); // שימוש בפונקציה החדשה
+    Sound.playGameMusic();
     setGameState('PLAYING');
     setIsPaused(false);
+    setShowIntroBeforeGame(false);
 
     if (canvasRef.current) {
       const vp = getViewportSize();
@@ -334,9 +372,9 @@ function App() {
           { 
             ...config, 
             skin: inventory.currentSkin, 
-            location: sugia?.location || 'nehardea',
-            modifier: sugia?.modifier || 'wave',
-            sugiaTitle: sugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא'),
+            location: actualSugia?.location || 'nehardea',
+            modifier: actualSugia?.modifier || 'wave',
+            sugiaTitle: actualSugia?.title || (customWordList ? 'תרגול מורה' : 'פתיחת הסוגיא'),
             customDictionary: dictionaryToUse,
             isTeacherPractice: !!customWordList
           },
@@ -404,6 +442,63 @@ function App() {
     if (state === 'LEADERBOARD') fetchData();
     setGameState(state);
   };
+
+  // Intro functions
+  const skipIntro = () => {
+    // Stop intro music
+    if (Sound.introTrack) {
+      Sound.introTrack.pause();
+      Sound.introTrack.currentTime = 0;
+    }
+    Sound.play('ui_click');
+    
+    if (showIntroBeforeGame) {
+      // If intro was shown before game, start the game
+      const storedConfig = (window as any).pendingGameConfig;
+      actuallyStartGame(storedConfig?.sugia);
+    } else {
+      // Otherwise go back to menu
+      Sound.playMenuMusic();
+      setGameState('MENU');
+    }
+  };
+
+  // Auto-advance intro images
+  useEffect(() => {
+    if (gameState !== 'INTRO' || INTRO_IMAGES.length === 0) return;
+
+    const timer = setTimeout(() => {
+      if (currentImageIndex < INTRO_IMAGES.length - 1) {
+        setCurrentImageIndex(currentImageIndex + 1);
+      } else {
+        // Finished all images
+        // Stop intro music
+        if (Sound.introTrack) {
+          Sound.introTrack.pause();
+          Sound.introTrack.currentTime = 0;
+        }
+        
+        if (showIntroBeforeGame) {
+          // If intro was shown before game, start the game
+          const storedConfig = (window as any).pendingGameConfig;
+          actuallyStartGame(storedConfig?.sugia);
+        } else {
+          // Otherwise go back to menu
+          Sound.playMenuMusic();
+          setGameState('MENU');
+        }
+      }
+    }, 5000); // 5 seconds per image
+
+    return () => clearTimeout(timer);
+  }, [gameState, currentImageIndex]);
+
+  // Play intro music when intro starts
+  useEffect(() => {
+    if (gameState === 'INTRO') {
+      Sound.playIntroMusic();
+    }
+  }, [gameState]);
 
   // Teacher Mode Helpers
   const generateTeacherLink = () => {
@@ -622,16 +717,74 @@ const equipSkin = (id: string) => {
       <canvas ref={canvasRef} className="block w-full h-full" />
 
       {/* Animated menu/backdrop (CSS) */}
-      {gameState !== 'PLAYING' && (
+      {gameState !== 'PLAYING' && gameState !== 'INTRO' && (
         <Backdrop mode={gameState === 'MENU' ? 'menu' : 'default'} showShips={gameState === 'MENU'} />
+      )}
+
+      {/* Intro Images - Auto-playing slideshow */}
+      {gameState === 'INTRO' && INTRO_IMAGES.length > 0 && (
+        <div className="absolute inset-0 z-[200] bg-black flex items-center justify-center">
+          {/* Skip Button - Top Right */}
+          <button
+            onClick={skipIntro}
+            className="absolute top-4 right-4 md:top-8 md:right-8 rk-glass border border-slate-700/60 rounded-xl px-4 py-2 text-sm md:text-base text-slate-300 hover:text-white hover:border-slate-500 transition-all z-10"
+          >
+            דלג
+          </button>
+
+          {/* Image Container */}
+          <div className="relative w-full h-full flex items-center justify-center">
+            {/* Current Image */}
+            <img
+              key={currentImageIndex}
+              src={INTRO_IMAGES[currentImageIndex]}
+              alt={`Intro ${currentImageIndex + 1}`}
+              className="w-full h-full object-cover"
+              style={{ 
+                animation: 'fadeIn 0.5s ease-in',
+                display: 'block'
+              }}
+              onLoad={() => {
+                // Image loaded successfully
+              }}
+              onError={(e) => {
+                // If image doesn't exist, skip to next or finish
+                console.warn(`Failed to load image: ${INTRO_IMAGES[currentImageIndex]}`);
+                if (currentImageIndex < INTRO_IMAGES.length - 1) {
+                  setTimeout(() => setCurrentImageIndex(currentImageIndex + 1), 100);
+                } else {
+                  skipIntro();
+                }
+              }}
+            />
+
+            {/* Text Overlay - Subtitle style with black background */}
+            {INTRO_TEXTS[currentImageIndex] && (
+              <div 
+                key={`text-${currentImageIndex}`}
+                className="absolute bottom-0 left-0 right-0 flex items-center justify-center p-4 md:p-8 pb-8 md:pb-12"
+                style={{ 
+                  opacity: 1,
+                  transition: 'opacity 0.3s ease-in'
+                }}
+              >
+                <div className="bg-black/85 border-2 border-amber-400/40 rounded-xl md:rounded-2xl px-6 py-4 md:px-10 md:py-6 max-w-4xl mx-auto shadow-2xl">
+                  <p className="text-center text-white font-aramaic text-lg md:text-3xl leading-relaxed">
+                    {INTRO_TEXTS[currentImageIndex]}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
       
       {unlockNotification && (
         <div
           className={`absolute left-1/2 -translate-x-1/2 z-[200] pointer-events-none w-full ${
-            isMobile ? 'bottom-0 animate-fade-in max-w-[18rem] px-3' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
+            isMobile ? 'top-24 animate-fade-in max-w-[20rem] px-4' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
           }`}
-          style={isMobile ? ({ bottom: 'calc(env(safe-area-inset-bottom) + 118px)' } as any) : undefined}
+          style={isMobile ? ({ top: '100px' } as any) : undefined}
         >
           <div className="rk-glass-strong rk-glow border border-amber-400/20 rounded-2xl overflow-hidden">
             <div className="px-3 py-2 md:px-8 md:py-4 flex items-center gap-3 md:gap-6">
@@ -883,9 +1036,17 @@ const equipSkin = (id: string) => {
                   <div className="mt-4 flex flex-col items-center justify-center opacity-80 hover:opacity-100 transition-opacity pb-8">
                       <span className="text-amber-400/80 text-[10px] md:text-xs font-bold tracking-widest mb-1">נוצר ע"י יוסף טולידנו</span>
                       <img
-                          src="https://drive.google.com/thumbnail?id=1Tu5_e7jgTsQHCr0yV_8d-9CbWwOwL7UM&sz=w1000"
+                          src="/logo.png"
                           alt="Yosef Toledano Logo"
                           className="h-12 md:h-16 w-auto object-contain drop-shadow-lg"
+                          loading="eager"
+                          onError={(e) => {
+                            // Fallback to Google Drive if local file doesn't exist
+                            const target = e.target as HTMLImageElement;
+                            if (target.src !== "https://drive.google.com/thumbnail?id=1Tu5_e7jgTsQHCr0yV_8d-9CbWwOwL7UM&sz=w1000") {
+                              target.src = "https://drive.google.com/thumbnail?id=1Tu5_e7jgTsQHCr0yV_8d-9CbWwOwL7UM&sz=w1000";
+                            }
+                          }}
                       />
                   </div>
               </div>
@@ -1139,19 +1300,31 @@ const equipSkin = (id: string) => {
       )}
 
       {gameState === 'SHOP' && (
-          <div className="absolute inset-0 bg-transparent flex flex-col items-center p-4 md:p-8 z-20 overflow-y-auto scrollbar-hide h-full text-white">
-              <div className="w-full max-w-6xl">
-                <div className="rk-glass-strong rounded-3xl px-4 py-4 md:px-8 md:py-6 mb-6 md:mb-10 flex flex-col md:flex-row justify-between items-center gap-4">
-                  <div className="text-center md:text-right">
-                    <h2 className="text-3xl md:text-7xl font-aramaic rk-neon-title leading-none">חנות הציוד</h2>
-                    <div className="rk-hud-label mt-2">שדרוגים, סקינים ופריטים מתכלים</div>
-                  </div>
-                  <div className="rk-glass rounded-full border border-slate-700/60 px-6 py-2 md:px-8 md:py-3 shadow-inner flex items-center gap-3">
-                    <span className="text-xl md:text-4xl font-black text-white">{coins.toLocaleString()}</span> <GoldCoin size={24} />
-                  </div>
+          <div className="absolute inset-0 bg-transparent flex flex-col z-20 overflow-hidden h-full text-white">
+            {/* Sticky Header - Always visible */}
+            <div className={`rk-glass-strong ${isMobile ? 'sticky top-0 z-30 backdrop-blur-md bg-slate-950/95' : ''} rounded-b-3xl md:rounded-3xl px-4 py-3 md:px-8 md:py-6 ${isMobile ? 'mb-4' : 'mb-6 md:mb-10'} flex flex-col md:flex-row justify-between items-center gap-3 md:gap-4 border-b border-slate-800/60`}>
+              <div className={`flex items-center ${isMobile ? 'justify-center relative w-full' : 'justify-between w-full md:w-auto'} gap-3`}>
+                <button onClick={handleReturnToMenu} className={`rk-btn rk-btn-muted ${isMobile ? 'absolute right-0 px-3 py-1.5 text-xs' : 'px-4 py-2 md:px-8 md:py-3 text-xs md:text-lg'} flex-shrink-0`}>
+                  {isMobile ? '←' : 'חזור'}
+                </button>
+                <div className={`${isMobile ? 'text-center w-full' : 'text-right'} md:text-right flex-1 md:flex-none`}>
+                  <h2 className={`${isMobile ? 'text-xl' : 'text-3xl md:text-7xl'} font-aramaic rk-neon-title leading-none`}>חנות הציוד</h2>
+                  {!isMobile && <div className="rk-hud-label mt-2">שדרוגים וסקינים</div>}
                 </div>
+              </div>
+              <div className={`rk-glass rounded-full border border-slate-700/60 ${isMobile ? 'px-4 py-1.5' : 'px-6 py-2 md:px-8 md:py-3'} shadow-inner flex items-center gap-2 md:gap-3 flex-shrink-0`}>
+                <span className={`${isMobile ? 'text-base' : 'text-xl md:text-4xl'} font-black text-white`}>{coins.toLocaleString()}</span> <GoldCoin size={isMobile ? 18 : 24} />
+              </div>
+            </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-8 mb-10">
+            {/* Scrollable Content */}
+            <div className={`flex-1 overflow-y-auto scrollbar-hide ${isMobile ? 'px-2' : 'px-4 md:px-8'} pb-4 md:pb-8`}>
+              <div className="w-full max-w-6xl mx-auto">
+                {isMobile && (
+                  <div className="rk-hud-label text-center mb-2 text-xs">שדרוגים וסקינים</div>
+                )}
+
+                <div className={`grid ${isMobile ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'} ${isMobile ? 'gap-1' : 'gap-4 md:gap-8'} ${isMobile ? 'mb-4' : 'mb-10'}`}>
                     {SHOP_ITEMS.map(item => {
                         const owned = item.type === 'skin' ? inventory.skins.includes(item.id) : false;
                         const equipped = inventory.currentSkin === item.id;
@@ -1182,10 +1355,10 @@ const equipSkin = (id: string) => {
                             }}
                             className={`${equipped ? 'ring-2 ring-amber-400/40' : ''} ${locked ? 'ring-2 ring-red-500/15 opacity-90' : ''} cursor-pointer`}
                           >
-                            <div className="p-4 md:p-6 flex flex-col h-full">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="rk-hud-label">{item.type === 'skin' ? 'Ship Skin' : 'Module'}</div>
-                                <div className={`rk-shop-badge ${
+                            <div className={`${isMobile ? 'p-1' : 'p-4 md:p-6'} flex flex-col h-full`}>
+                              <div className={`flex items-center justify-between ${isMobile ? 'gap-0.5 mb-0.5' : 'gap-3'}`}>
+                                <div className={`rk-hud-label ${isMobile ? 'text-[6px]' : ''}`}>{item.type === 'skin' ? 'Skin' : 'Module'}</div>
+                                <div className={`rk-shop-badge ${isMobile ? 'text-[6px] px-0.5 py-0' : ''} ${
                                   badge.kind === 'price' ? 'is-price' :
                                   badge.kind === 'owned' ? 'is-owned' :
                                   badge.kind === 'equipped' ? 'is-equipped' : 'is-locked'
@@ -1194,7 +1367,7 @@ const equipSkin = (id: string) => {
                                 </div>
                               </div>
 
-                              <div className="mt-4 rk-item-frame rk-tilt-layer" style={{ ['--z' as any]: '34px' } as any}>
+                              <div className={`${isMobile ? 'mt-0.5' : 'mt-4'} rk-item-frame rk-tilt-layer`} style={{ ['--z' as any]: '34px' } as any}>
                                 <div className="rk-item-frame-inner">
                                   {(() => {
                                     if (item.type === 'skin') {
@@ -1209,30 +1382,30 @@ const equipSkin = (id: string) => {
                                           }
                                           alt={item.name}
                                           draggable={false}
-                                          className="w-32 h-32 md:w-56 md:h-56 object-contain drop-shadow-2xl"
+                                          className={`${isMobile ? 'w-16 h-16' : 'w-32 h-32 md:w-56 md:h-56'} object-contain drop-shadow-2xl`}
                                           style={{ imageRendering: 'auto', objectFit: 'contain' }}
                                         />
                                       );
                                     }
                                     if (item.id === 'upgrade_bomb') {
-                                      return <img src={'/ships/bomb.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                      return <img src={'/ships/bomb.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
                                     }
                                     if (item.id === 'item_shield') {
-                                      return <img src={'/ships/shield.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                      return <img src={'/ships/shield.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
                                     }
                                     if (item.id === 'item_freeze') {
-                                      return <img src={'/ships/freeze.png'} alt={item.name} draggable={false} className="w-28 h-28 md:w-52 md:h-52 object-contain drop-shadow-2xl" />;
+                                      return <img src={'/ships/freeze.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
                                     }
-                                    return <div className="text-6xl md:text-8xl drop-shadow-2xl">{item.icon}</div>;
+                                    return <div className={`${isMobile ? 'text-2xl' : 'text-6xl md:text-8xl'} drop-shadow-2xl`}>{item.icon}</div>;
                                   })()}
                                 </div>
                               </div>
 
-                              <h3 className="mt-4 font-black text-white text-lg md:text-3xl">{item.name}</h3>
-                              <p className="mt-1 text-sm md:text-base text-slate-300/85 leading-relaxed flex-1 line-clamp-3">{item.desc}</p>
+                              <h3 className={`${isMobile ? 'mt-0.5 text-[8px]' : 'mt-4 text-lg md:text-3xl'} font-black text-white leading-tight`}>{item.name}</h3>
+                              <p className={`${isMobile ? 'mt-0 text-[7px] line-clamp-2' : 'mt-1 text-sm md:text-base line-clamp-3'} text-slate-300/85 leading-tight flex-1`}>{item.desc}</p>
 
-                              <div className="mt-5">
-                                <div className={`rk-shop-cta ${
+                              <div className={`${isMobile ? 'mt-0.5' : 'mt-5'}`}>
+                                <div className={`rk-shop-cta ${isMobile ? 'text-[7px] py-0.5 px-1' : ''} ${
                                   cta.kind === 'buy' ? 'is-buy' :
                                   cta.kind === 'select' ? 'is-select' :
                                   cta.kind === 'equipped' ? 'is-equipped' : 'is-locked'
@@ -1240,8 +1413,8 @@ const equipSkin = (id: string) => {
                                   {cta.text}
                                 </div>
                                 {locked && requiredTitle && (
-                                  <div className="mt-2 text-center text-xs md:text-sm font-bold text-slate-200/80">
-                                    דרוש הישג: <span className="text-amber-300">{requiredTitle}</span>
+                                  <div className={`${isMobile ? 'mt-0 text-[6px]' : 'mt-2 text-xs md:text-sm'} text-center font-bold text-slate-200/80`}>
+                                    דרוש: <span className="text-amber-300">{requiredTitle}</span>
                                   </div>
                                 )}
                               </div>
@@ -1250,11 +1423,8 @@ const equipSkin = (id: string) => {
                         );
                     })}
                 </div>
-
-                <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted mx-auto block mb-10 md:mb-12 text-lg md:text-2xl">
-                  חזור
-                </button>
               </div>
+            </div>
           </div>
       )}
 

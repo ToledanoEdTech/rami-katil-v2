@@ -49,6 +49,25 @@ class PoolableEnemy {
 
 type BossId = 'tannina' | 'koy' | 'shed' | 'ashmedai' | 'agirat' | 'leviathan' | 'ziz';
 
+type BossTextureMode = 'static' | 'sheet';
+
+type BossSheetMeta = {
+    // Number of frames in the sheet
+    frames: number;
+    // Frames per second (game dt is normalized to 60fps, see App.tsx)
+    fps: number;
+    // Optional grid layout (defaults to a horizontal strip)
+    cols?: number;
+    rows?: number;
+    /**
+     * Optional color-key to treat a solid background as transparent.
+     * Useful when the sheet has an opaque white background.
+     */
+    keyColor?: string;
+    /** Color distance tolerance (0-255), default ~10 */
+    keyTolerance?: number;
+};
+
 const BOSS_SEQUENCE: BossId[] = ['tannina', 'koy', 'shed', 'ashmedai', 'agirat', 'leviathan', 'ziz'];
 
 const BOSS_NAMES: Record<BossId, string> = {
@@ -102,6 +121,10 @@ export class GameEngine {
   bossTextures: Partial<Record<BossId, HTMLImageElement | null>> = {};
   bossTextureStatus: Partial<Record<BossId, 'idle' | 'loading' | 'loaded' | 'error'>> = {};
   bossSprites: Partial<Record<BossId, HTMLCanvasElement | null>> = {};
+  bossTextureMode: Partial<Record<BossId, BossTextureMode>> = {};
+  bossSheetMeta: Partial<Record<BossId, BossSheetMeta>> = {};
+  bossSheetCanvas: Partial<Record<BossId, HTMLCanvasElement | null>> = {};
+  bossSheetFrameCache: Partial<Record<BossId, Array<{ sx: number; sy: number; sw: number; sh: number; cx: number; cy: number; cw: number; ch: number }> | null>> = {};
   
   // --- Boss cycle: after defeating Ziz, loop bosses from the start with stronger stats ---
   bossCycleMode: boolean = false;
@@ -1662,6 +1685,202 @@ export class GameEngine {
   // Boss texture system (images)
   // ============================
 
+  private isBossSheetCandidate(path: string): boolean {
+    return path.includes('_sheet');
+  }
+
+  private inferBossSheetMeta(img: HTMLImageElement): BossSheetMeta {
+    // Default assumptions:
+    // - horizontal strip
+    // - 4 frames (or 5 if width divides nicely and looks reasonable)
+    // - ~8fps at 60fps base tick
+    const w = img.naturalWidth || img.width || 1;
+    const h = img.naturalHeight || img.height || 1;
+
+    for (const frames of [5, 4]) {
+      if (frames > 1 && w % frames === 0) {
+        const fw = w / frames;
+        const aspect = fw / h;
+        if (aspect > 0.45 && aspect < 3.2) return { frames, fps: 8 };
+      }
+    }
+    return { frames: 4, fps: 8 };
+  }
+
+  private async loadBossSheetMeta(id: BossId) {
+    try {
+      const res = await fetch(this.assetUrl(`bosses/${id}_sheet.json`));
+      if (!res.ok) return;
+      const data: any = await res.json();
+
+      const current = this.bossSheetMeta[id];
+      const framesRaw = typeof data.frames === 'number' ? data.frames : current?.frames;
+      const fpsRaw = typeof data.fps === 'number' ? data.fps : current?.fps;
+      const colsRaw = typeof data.cols === 'number' ? data.cols : undefined;
+      const rowsRaw = typeof data.rows === 'number' ? data.rows : undefined;
+      const keyColorRaw = typeof data.keyColor === 'string' ? data.keyColor : current?.keyColor;
+      const keyToleranceRaw = typeof data.keyTolerance === 'number' ? data.keyTolerance : current?.keyTolerance;
+
+      const frames = Math.max(1, Math.min(60, Math.floor(framesRaw || 4)));
+      const fps = Math.max(1, Math.min(60, Number(fpsRaw || 8)));
+
+      const meta: BossSheetMeta = { frames, fps };
+      if (Number.isFinite(colsRaw)) meta.cols = Math.max(1, Math.floor(colsRaw));
+      if (Number.isFinite(rowsRaw)) meta.rows = Math.max(1, Math.floor(rowsRaw));
+      if (typeof keyColorRaw === 'string' && keyColorRaw.trim()) meta.keyColor = keyColorRaw.trim();
+      if (typeof keyToleranceRaw === 'number' && Number.isFinite(keyToleranceRaw)) meta.keyTolerance = Math.max(0, Math.min(255, keyToleranceRaw));
+
+      this.bossSheetMeta[id] = meta;
+
+      if ((import.meta as any).env?.DEV) {
+        console.info(`[bosses] Loaded bosses/${id}_sheet.json meta`, meta);
+      }
+
+      // Meta might change frames/grid/keying; rebuild cached crop rects
+      if (this.bossTextureMode[id] === 'sheet') {
+        this.rebuildBossSheetFrameCache(id);
+      }
+    } catch {
+      // No meta file / invalid JSON — ignore and keep inferred defaults
+    }
+  }
+
+  private rebuildBossSheetFrameCache(id: BossId) {
+    const img = this.bossTextures[id];
+    if (!img || !img.complete || img.naturalWidth <= 0) return;
+
+    const meta = this.bossSheetMeta[id] || this.inferBossSheetMeta(img);
+    const frames = Math.max(1, Math.min(60, Math.floor(meta.frames || 4)));
+
+    // Decide whether we need color-keying (usually only if the sheet is fully opaque)
+    const hasAlpha = this.isLikelyTransparentSprite(img);
+    const wantsKey = typeof meta.keyColor === 'string' && meta.keyColor.trim().length > 0;
+    const needsKeying = wantsKey || !hasAlpha;
+
+    // Build (or clear) the processed sheet canvas
+    let sheetCanvas: HTMLCanvasElement | null = null;
+    if (needsKeying) {
+      const w = img.naturalWidth || img.width || 1;
+      const h = img.naturalHeight || img.height || 1;
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true } as any) as CanvasRenderingContext2D | null;
+      if (ctx) {
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0);
+
+        try {
+          const imageData = ctx.getImageData(0, 0, w, h);
+          const data = imageData.data;
+
+          // Key color: meta.keyColor OR the most likely corner background color
+          let key = wantsKey ? (this.hexToRgb(meta.keyColor!.trim()) || { r: 255, g: 255, b: 255 }) : { r: 255, g: 255, b: 255 };
+          if (!wantsKey) {
+            const get = (x: number, y: number) => {
+              const i = (y * w + x) * 4;
+              return { r: data[i], g: data[i + 1], b: data[i + 2] };
+            };
+            const tl = get(0, 0);
+            const tr = get(w - 1, 0);
+            const bl = get(0, h - 1);
+            const br = get(w - 1, h - 1);
+            // Pick the most common exact RGB among corners; fallback to top-left
+            const corners = [tl, tr, bl, br];
+            let best = tl;
+            let bestCount = 0;
+            for (let i = 0; i < corners.length; i++) {
+              let count = 0;
+              for (let j = 0; j < corners.length; j++) {
+                if (corners[i].r === corners[j].r && corners[i].g === corners[j].g && corners[i].b === corners[j].b) count++;
+              }
+              if (count > bestCount) { bestCount = count; best = corners[i]; }
+            }
+            key = best;
+          }
+
+          const tol = typeof meta.keyTolerance === 'number' ? Math.max(0, Math.min(255, meta.keyTolerance)) : 10;
+          // Use max-channel distance for cheap comparisons
+          const within = (r: number, g: number, b: number) =>
+            Math.max(Math.abs(r - key.r), Math.abs(g - key.g), Math.abs(b - key.b)) <= tol;
+
+          for (let i = 0; i < data.length; i += 4) {
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            if (within(r, g, b)) data[i + 3] = 0;
+          }
+          ctx.putImageData(imageData, 0, 0);
+          sheetCanvas = c;
+        } catch {
+          // If we can't read pixels, fall back to drawing the original (may show a rectangle)
+          sheetCanvas = c;
+        }
+      }
+    }
+
+    this.bossSheetCanvas[id] = sheetCanvas;
+
+    const source: CanvasImageSource = sheetCanvas || img;
+    const srcW = sheetCanvas ? sheetCanvas.width : (img.naturalWidth || img.width || 1);
+    const srcH = sheetCanvas ? sheetCanvas.height : (img.naturalHeight || img.height || 1);
+
+    let cols = meta.cols && meta.cols > 1 ? Math.floor(meta.cols) : 0;
+    if (cols > 1 && cols < frames) cols = cols; // ok
+    const rows = cols > 1 ? (meta.rows && meta.rows > 0 ? Math.floor(meta.rows) : Math.ceil(frames / cols)) : 1;
+
+    const frameW = cols > 1 ? Math.floor(srcW / cols) : Math.floor(srcW / frames);
+    const frameH = cols > 1 ? Math.floor(srcH / rows) : srcH;
+    if (frameW <= 0 || frameH <= 0) return;
+
+    // Build per-frame crop rects (to remove large transparent padding)
+    const tmp = document.createElement('canvas');
+    tmp.width = frameW;
+    tmp.height = frameH;
+    const tctx = tmp.getContext('2d', { willReadFrequently: true } as any) as CanvasRenderingContext2D | null;
+    if (!tctx) return;
+
+    const cache: Array<{ sx: number; sy: number; sw: number; sh: number; cx: number; cy: number; cw: number; ch: number }> = [];
+    for (let i = 0; i < frames; i++) {
+      const sx = cols > 1 ? (i % cols) * frameW : i * frameW;
+      const sy = cols > 1 ? Math.floor(i / cols) * frameH : 0;
+
+      let cx = 0, cy = 0, cw = frameW, ch = frameH;
+      try {
+        tctx.clearRect(0, 0, frameW, frameH);
+        tctx.drawImage(source as any, sx, sy, frameW, frameH, 0, 0, frameW, frameH);
+        const data = tctx.getImageData(0, 0, frameW, frameH).data;
+
+        const alphaMin = 10;
+        let minX = frameW, minY = frameH, maxX = -1, maxY = -1;
+        for (let p = 3, px = 0; p < data.length; p += 4, px++) {
+          const a = data[p];
+          if (a <= alphaMin) continue;
+          const x = px % frameW;
+          const y = (px / frameW) | 0;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+        if (maxX >= minX && maxY >= minY) {
+          cx = minX;
+          cy = minY;
+          cw = Math.max(1, (maxX - minX + 1));
+          ch = Math.max(1, (maxY - minY + 1));
+        }
+      } catch {
+        // If we can't read pixels, use full frame rect
+      }
+
+      cache.push({ sx, sy, sw: frameW, sh: frameH, cx, cy, cw, ch });
+    }
+
+    this.bossSheetFrameCache[id] = cache;
+
+    if ((import.meta as any).env?.DEV) {
+      console.info(`[bosses] Rebuilt sheet cache for ${id}: frames=${frames}, frame=${frameW}x${frameH}, keyed=${needsKeying}`);
+    }
+  }
+
   private getBossTextureDrawBox(id: BossId): { w: number; h: number; offsetY: number } {
     // Tuned to roughly match the procedural bosses' footprint (before the mobile 0.75 scale in drawBoss()).
     // offsetY shifts the image down a bit so the boss "sits" similarly to the procedural art.
@@ -1714,8 +1933,12 @@ export class GameEngine {
       img.decoding = 'async';
 
       img.onload = () => {
-        // Prevent “rectangle around the boss” if the asset has no transparency
-        if (!this.isLikelyTransparentSprite(img)) {
+        const candidatePath = candidates[idx];
+        const mode: BossTextureMode = this.isBossSheetCandidate(candidatePath) ? 'sheet' : 'static';
+        const hasAlpha = this.isLikelyTransparentSprite(img);
+
+        // Prevent “rectangle around the boss” for static images (but allow opaque sprite sheets + color keying).
+        if (mode !== 'sheet' && !hasAlpha) {
           console.warn(`[bosses] Ignoring ${candidates[idx]} for ${id}: image has no transparency (use a PNG/WebP with transparent background).`);
           if (idx + 1 < candidates.length) {
             tryLoad(idx + 1);
@@ -1723,23 +1946,58 @@ export class GameEngine {
           }
           this.bossTextures[id] = null;
           this.bossTextureStatus[id] = 'error';
+          this.bossTextureMode[id] = 'static';
           this.bossSprites[id] = null;
+          this.bossSheetMeta[id] = undefined;
+          this.bossSheetCanvas[id] = null;
+          this.bossSheetFrameCache[id] = null;
           return;
         }
 
+        this.bossTextureMode[id] = mode;
+
         this.bossTextures[id] = img;
         this.bossTextureStatus[id] = 'loaded';
-        this.bossSprites[id] = this.buildBossSprite(id, img);
+
+        if (mode === 'sheet') {
+          this.bossSprites[id] = null;
+          this.bossSheetMeta[id] = this.inferBossSheetMeta(img);
+          // Build crop cache now (may rebuild after meta loads). Also handles opaque sheets via keyColor/meta.
+          this.rebuildBossSheetFrameCache(id);
+          void this.loadBossSheetMeta(id);
+        } else {
+          this.bossSheetMeta[id] = undefined;
+          this.bossSheetCanvas[id] = null;
+          this.bossSheetFrameCache[id] = null;
+          this.bossSprites[id] = this.buildBossSprite(id, img);
+        }
+
+        // Dev-only: show which boss asset actually loaded (helps debug naming / caching issues)
+        if ((import.meta as any).env?.DEV) {
+          const meta = this.bossSheetMeta[id];
+          if (mode === 'sheet' && meta) {
+            console.info(`[bosses] Loaded ${candidatePath} for ${id} (sheet: frames=${meta.frames}, fps=${meta.fps}, cols=${meta.cols ?? 0}, rows=${meta.rows ?? 0}, alpha=${hasAlpha})`);
+          } else {
+            console.info(`[bosses] Loaded ${candidatePath} for ${id} (static)`);
+          }
+        }
       };
 
       img.onerror = () => {
+        if ((import.meta as any).env?.DEV) {
+          console.info(`[bosses] Failed to load ${candidates[idx]} for ${id}`);
+        }
         if (idx + 1 < candidates.length) {
           tryLoad(idx + 1);
           return;
         }
         this.bossTextures[id] = null;
         this.bossTextureStatus[id] = 'error';
+        this.bossTextureMode[id] = 'static';
         this.bossSprites[id] = null;
+        this.bossSheetMeta[id] = undefined;
+        this.bossSheetCanvas[id] = null;
+        this.bossSheetFrameCache[id] = null;
       };
 
       img.src = this.assetUrl(candidates[idx]);
@@ -1752,24 +2010,126 @@ export class GameEngine {
     // Image-based (replace these files to change bosses in-game).
     // If a boss image is missing, we fall back to the procedural boss rendering.
     const imageCandidates: Record<BossId, string[]> = {
-      tannina: ['bosses/tannina.webp', 'bosses/tannina.png', 'bosses/boss_tannina.png', 'bosses/skin_tannina.png'],
-      koy: ['bosses/koy.webp', 'bosses/koy.png', 'bosses/boss_koy.png', 'bosses/skin_koy.png'],
-      shed: ['bosses/shed.webp', 'bosses/shed.png', 'bosses/boss_shed.png', 'bosses/skin_shed.png'],
-      ashmedai: ['bosses/ashmedai.webp', 'bosses/ashmedai.png', 'bosses/boss_ashmedai.png', 'bosses/skin_ashmedai.png'],
-      agirat: ['bosses/agirat.webp', 'bosses/agirat.png', 'bosses/boss_agirat.png', 'bosses/skin_agirat.png'],
-      leviathan: ['bosses/leviathan.webp', 'bosses/leviathan.png', 'bosses/boss_leviathan.png', 'bosses/skin_leviathan.png'],
-      ziz: ['bosses/ziz.webp', 'bosses/ziz.png', 'bosses/boss_ziz.png', 'bosses/skin_ziz.png']
+      tannina: [
+        'bosses/tannina_sheet.webp', 'bosses/tannina_sheet.png',
+        'bosses/tannina.webp', 'bosses/tannina.png', 'bosses/boss_tannina.png', 'bosses/skin_tannina.png'
+      ],
+      koy: [
+        'bosses/koy_sheet.webp', 'bosses/koy_sheet.png',
+        'bosses/koy.webp', 'bosses/koy.png', 'bosses/boss_koy.png', 'bosses/skin_koy.png'
+      ],
+      shed: [
+        'bosses/shed_sheet.webp', 'bosses/shed_sheet.png',
+        'bosses/shed.webp', 'bosses/shed.png', 'bosses/boss_shed.png', 'bosses/skin_shed.png'
+      ],
+      ashmedai: [
+        'bosses/ashmedai_sheet.webp', 'bosses/ashmedai_sheet.png',
+        'bosses/ashmedai.webp', 'bosses/ashmedai.png', 'bosses/boss_ashmedai.png', 'bosses/skin_ashmedai.png'
+      ],
+      agirat: [
+        'bosses/agirat_sheet.webp', 'bosses/agirat_sheet.png',
+        'bosses/agirat.webp', 'bosses/agirat.png', 'bosses/boss_agirat.png', 'bosses/skin_agirat.png'
+      ],
+      leviathan: [
+        'bosses/leviathan_sheet.webp', 'bosses/leviathan_sheet.png',
+        'bosses/leviathan.webp', 'bosses/leviathan.png', 'bosses/boss_leviathan.png', 'bosses/skin_leviathan.png'
+      ],
+      ziz: [
+        'bosses/ziz_sheet.webp', 'bosses/ziz_sheet.png',
+        'bosses/ziz.webp', 'bosses/ziz.png', 'bosses/boss_ziz.png', 'bosses/skin_ziz.png'
+      ]
     };
 
     (Object.keys(imageCandidates) as BossId[]).forEach((id) => {
       this.bossTextures[id] = null;
       this.bossTextureStatus[id] = 'idle';
       this.bossSprites[id] = null;
+      this.bossTextureMode[id] = 'static';
+      this.bossSheetMeta[id] = undefined;
+      this.bossSheetCanvas[id] = null;
+      this.bossSheetFrameCache[id] = null;
       this.loadBossTextureWithFallback(id, imageCandidates[id]);
     });
   }
 
+  private getBossSheetFrameIndex(frames: number, fps: number): number {
+    const t = (this.boss && typeof this.boss.frame === 'number') ? this.boss.frame : this.gameFrame;
+    const speed = fps / 60;
+    const idx = Math.floor(t * speed) % frames;
+    return idx < 0 ? idx + frames : idx;
+  }
+
+  private drawBossFromSpriteSheet(id: BossId): boolean {
+    const img = this.bossTextures[id];
+    if (!img || !img.complete || img.naturalWidth <= 0) return false;
+
+    const meta = this.bossSheetMeta[id] || this.inferBossSheetMeta(img);
+    const frames = Math.max(1, Math.min(60, Math.floor(meta.frames || 4)));
+    const fps = Math.max(1, Math.min(60, Number(meta.fps || 8)));
+
+    const frameIndex = this.getBossSheetFrameIndex(frames, fps);
+
+    const source: CanvasImageSource = this.bossSheetCanvas[id] || img;
+    const cache = this.bossSheetFrameCache[id];
+
+    let sx = 0, sy = 0, frameW = 0, frameH = 0;
+    let cx = 0, cy = 0, cw = 0, ch = 0;
+
+    if (cache && cache.length >= frames) {
+      const r = cache[frameIndex];
+      sx = r.sx; sy = r.sy; frameW = r.sw; frameH = r.sh;
+      cx = r.cx; cy = r.cy; cw = r.cw; ch = r.ch;
+    } else {
+      // Fallback: compute frame rects (no cropping)
+      const srcW = (this.bossSheetCanvas[id]?.width) || (img.naturalWidth || img.width || 1);
+      const srcH = (this.bossSheetCanvas[id]?.height) || (img.naturalHeight || img.height || 1);
+      const cols = meta.cols && meta.cols > 1 ? Math.floor(meta.cols) : 0;
+      if (cols > 1) {
+        const rows = meta.rows && meta.rows > 0 ? Math.floor(meta.rows) : Math.ceil(frames / cols);
+        frameW = Math.floor(srcW / cols);
+        frameH = Math.floor(srcH / rows);
+        sx = (frameIndex % cols) * frameW;
+        sy = Math.floor(frameIndex / cols) * frameH;
+      } else {
+        frameW = Math.floor(srcW / frames);
+        frameH = srcH;
+        sx = frameIndex * frameW;
+        sy = 0;
+      }
+      cx = 0; cy = 0; cw = frameW; ch = frameH;
+    }
+
+    if (frameW <= 0 || frameH <= 0 || cw <= 0 || ch <= 0) return false;
+
+    const box = this.getBossTextureDrawBox(id);
+    const pad = Math.round(Math.min(box.w, box.h) * 0.05);
+    const availW = Math.max(1, box.w - pad * 2);
+    const availH = Math.max(1, box.h - pad * 2);
+
+    const scale = Math.min(availW / cw, availH / ch);
+    const w = cw * scale;
+    const h = ch * scale;
+
+    const dx = -box.w / 2 + (box.w - w) / 2;
+    const dy = -box.h / 2 + box.offsetY + (box.h - h) / 2;
+
+    this.ctx.save();
+    this.ctx.imageSmoothingEnabled = true;
+    (this.ctx as any).imageSmoothingQuality = 'high';
+    // Similar to buildBossSprite() baked shadow, but per-frame
+    this.ctx.shadowBlur = 18;
+    this.ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    this.ctx.drawImage(source as any, sx + cx, sy + cy, cw, ch, dx, dy, w, h);
+    this.ctx.restore();
+    return true;
+  }
+
   private drawBossFromTexture(id: BossId): boolean {
+    const mode: BossTextureMode = this.bossTextureMode[id] || 'static';
+    if (mode === 'sheet') {
+      return this.drawBossFromSpriteSheet(id);
+    }
+
     const sprite = this.bossSprites[id];
     if (sprite) {
       const box = this.getBossTextureDrawBox(id);
@@ -2153,7 +2513,7 @@ export class GameEngine {
             e.x += dist * 0.01 * dt;
           }
 
-          if (e.y > this.height + 100) { e.active = false; if(e.isCorrect) this.handleMiss(); continue; }
+          if (e.y > this.height + 100) { e.active = false; if(e.isCorrect) this.handleMiss('fail'); continue; }
 
           let hit = false;
           for (let j = 0; j < this.projectilePool.length; j++) {
@@ -2206,24 +2566,26 @@ export class GameEngine {
             this.startRound();
           }, 50); 
       } else {
-          this.triggerShake(12); this.spawnExplosion(x, y, '#ef4444', 20); this.handleMiss();
+          this.triggerShake(12); this.spawnExplosion(x, y, '#ef4444', 20); this.handleMiss('fail');
       }
   }
 
-  handleMiss() {
+  handleMiss(reason: 'fail' | 'damage' = 'damage') {
       if (this.playerExploding) return;
+      if (reason === 'fail') Sound.play('fail');
+      else Sound.play('hit');
       if (this.boss) this.bossDamageTaken = true; 
       this.enemyPool.forEach(e => e.active = false);
       this.hazards = [];
       this.bossProjectiles = [];
       this.projectilePool.forEach(p => { if (p.type !== 'beam') p.active = false; });
       if (this.shieldStrength > 0) {
-          this.shieldStrength--; this.triggerShake(10); Sound.play('hit');
+          this.shieldStrength--; this.triggerShake(10);
           this.onFeedback(this.shieldStrength === 1 ? "מגן נסדק!" : "מגן נשבר!", false);
           this.onStatsUpdate({ hasShield: this.shieldStrength > 0 });
           setTimeout(() => this.startRound(), 1000);
       } else {
-          this.lives--; this.combo = 0; this.triggerShake(20); Sound.play('hit'); this.onFeedback("נפגעת!", false);
+          this.lives--; this.combo = 0; this.triggerShake(20); this.onFeedback("נפגעת!", false);
           this.spawnExplosion(this.player.x, this.player.y, '#ef4444', 40);
           this.onStatsUpdate({ lives: this.lives, combo: 0 });
           if (this.lives <= 0) { this.playerExploding = true; this.explosionTimer = 90; this.onStatsUpdate({ bossActive: false, bossHpPercent: 0 }); Sound.play('explosion'); }
@@ -2237,7 +2599,10 @@ export class GameEngine {
   }
 
   draw() {
-    this.ctx.fillStyle = '#020617'; this.ctx.fillRect(0, 0, this.width, this.height);
+    // Clear canvas first to prevent seeing previous frame during shake
+    this.ctx.fillStyle = '#020617'; 
+    this.ctx.fillRect(0, 0, this.width, this.height);
+    
     this.ctx.save();
     if (this.shakeAmount > 0.1) this.ctx.translate((Math.random()-0.5)*this.shakeAmount, (Math.random()-0.5)*this.shakeAmount);
     this.drawBackgroundTheme();
@@ -2263,43 +2628,355 @@ export class GameEngine {
   }
 
   drawBackgroundTheme() {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
     const loc = this.config.location || 'nehardea';
+    const t = this.gameFrame * 0.016;
     const subPhase = this.level % 7;
-    if (loc === 'nehardea') {
-        const blueVal = 138 + (subPhase * 15);
-        const grad = this.ctx.createLinearGradient(0, this.height - 200, 0, this.height);
-        grad.addColorStop(0, 'rgba(30, 58, 138, 0)'); grad.addColorStop(1, `rgba(30, 58, ${blueVal}, 0.5)`);
-        this.ctx.fillStyle = grad; this.ctx.fillRect(0, this.height - 200, this.width, 200);
-    } else if (loc === 'sura') {
-        const pillarAlpha = 0.15 + (subPhase * 0.04);
-        this.ctx.fillStyle = `rgba(239, 68, 68, ${pillarAlpha})`;
-        for(let i=0; i<4; i++) {
-            const x = (i * this.width / 3 + this.gameFrame * 0.5) % (this.width + 100) - 50;
-            this.ctx.fillRect(x, 0, 3, this.height);
+    const isMobile = w < 600;
+    const scale = isMobile ? Math.min(w / 800, h / 1200, 1) : 1;
+
+    const linear = (y0: number, y1: number, stops: Array<[number, string]>) => {
+      const g = ctx.createLinearGradient(0, y0, 0, y1);
+      stops.forEach(([p, c]) => g.addColorStop(p, c));
+      return g;
+    };
+
+    const radial = (x: number, y: number, r: number, stops: Array<[number, string]>) => {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      stops.forEach(([p, c]) => g.addColorStop(p, c));
+      return g;
+    };
+
+    const clampAlpha = (n: number) => Math.max(0, Math.min(1, n));
+
+    ctx.save();
+
+    switch (loc) {
+      case 'nehardea': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#0a1224'],
+          [0.55, '#0b1c34'],
+          [1, '#062538']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        const riverTop = h * 0.6;
+        const riverOffset = isMobile ? 25 : 40;
+        const river = linear(riverTop - riverOffset, h, [
+          [0, `rgba(34, 211, 238, ${clampAlpha(0.08 + subPhase * 0.01)})`],
+          [0.45, `rgba(14, 165, 233, ${clampAlpha(0.18 + subPhase * 0.015)})`],
+          [1, 'rgba(6, 182, 212, 0.42)']
+        ]);
+        ctx.fillStyle = river;
+        ctx.fillRect(0, riverTop - riverOffset, w, h);
+
+        const waveAmp = isMobile ? (8 + subPhase * 1.5) : (10 + subPhase * 2);
+        const waveStep = isMobile ? Math.max(32, w / 15) : 48;
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        ctx.moveTo(0, riverTop);
+        for (let x = 0; x <= w; x += waveStep) {
+          const y =
+            riverTop +
+            Math.sin(x * 0.012 + t * 1.4) * waveAmp +
+            Math.cos(t * 0.7 + x * 0.006) * waveAmp * 0.6;
+          ctx.lineTo(x, y);
         }
-    } else if (loc === 'pumbedita') {
-        const scrollAlpha = 0.15 + (subPhase * 0.03);
-        this.ctx.fillStyle = `rgba(251, 191, 36, ${scrollAlpha})`;
-        this.ctx.font = 'bold 30px serif';
-        for(let i=0; i<6; i++) {
-            const x = (i * 300 + this.gameFrame * 0.4) % (this.width + 200) - 100;
-            const y = 100 + (i * 150) % (this.height - 200);
-            this.ctx.fillText("📜", x, y);
+        ctx.lineTo(w, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.32)';
+        ctx.fill();
+        ctx.restore();
+
+        ctx.globalCompositeOperation = 'lighter';
+        const glowCount = isMobile ? 3 : 5;
+        const glowRadius = isMobile ? 80 : 120;
+        const glowSize = glowRadius * 2;
+        for (let i = 0; i < glowCount; i++) {
+          const gx = (i * (w / (glowCount - 1 || 1)) + t * (isMobile ? 80 : 110)) % (w + glowSize) - glowRadius;
+          const gy = riverTop + (isMobile ? 15 : 22) + Math.sin(t + i) * (isMobile ? 10 : 16);
+          ctx.fillStyle = radial(gx, gy, glowRadius, [
+            [0, 'rgba(125, 211, 252, 0.55)'],
+            [0.6, 'rgba(125, 211, 252, 0.12)'],
+            [1, 'rgba(125, 211, 252, 0)']
+          ]);
+          ctx.fillRect(gx - glowRadius, gy - glowRadius, glowSize, glowSize);
         }
-    } else {
-        this.ctx.save();
-        this.ctx.globalAlpha = 0.08;
-        this.ctx.fillStyle = '#fff';
-        this.ctx.font = 'bold 45px Frank Ruhl Libre';
+        break;
+      }
+      case 'sura': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#180c1f'],
+          [0.55, '#230c1d'],
+          [1, '#2c0f15']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.fillStyle = radial(w * 0.5, h * 0.92, h * 0.9, [
+          [0, 'rgba(249, 115, 22, 0.28)'],
+          [0.5, 'rgba(239, 68, 68, 0.22)'],
+          [1, 'rgba(88, 28, 135, 0)']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        const ringCount = isMobile ? 4 : 6;
+        for (let i = 0; i < ringCount; i++) {
+          const y = h * 0.72 + Math.sin(t * 0.7 + i) * (isMobile ? 12 : 18);
+          const rx = w * (0.36 + i * 0.05);
+          const ry = h * (0.10 + i * 0.03);
+          ctx.save();
+          ctx.translate(w / 2, y);
+          ctx.rotate(Math.sin(t * 0.25 + i) * 0.08);
+          ctx.strokeStyle = `rgba(248, 113, 113, ${0.14 + i * 0.03})`;
+          ctx.lineWidth = (isMobile ? 1.2 : 1.5) + i * (isMobile ? 0.5 : 0.7);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.globalCompositeOperation = 'lighter';
+        const particleCount = isMobile ? 10 : 18;
+        const particleRadius = isMobile ? 24 : 36;
+        const particleSize = isMobile ? 80 : 120;
+        for (let i = 0; i < particleCount; i++) {
+          const px = (i * (w / (particleCount * 0.7)) + t * (isMobile ? 90 : 130) + i * (isMobile ? 10 : 14)) % (w + particleSize) - (particleSize / 2);
+          const py = h * 0.15 + (i % (isMobile ? 3 : 4)) * h * (isMobile ? 0.22 : 0.18) + Math.sin(t * 1.4 + i) * (isMobile ? 12 : 18);
+          ctx.fillStyle = radial(px, py, particleRadius + (i % 3) * (isMobile ? 5 : 8), [
+            [0, 'rgba(255, 214, 102, 0.9)'],
+            [0.5, 'rgba(251, 113, 133, 0.45)'],
+            [1, 'rgba(251, 113, 133, 0)']
+          ]);
+          ctx.globalAlpha = 0.35 + 0.25 * Math.sin(t * 1.3 + i);
+          ctx.fillRect(px - (particleSize / 2), py - (particleSize / 2), particleSize, particleSize);
+        }
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'pumbedita': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#1f1422'],
+          [0.5, '#27151a'],
+          [1, '#1d100f']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        const haloRadius = isMobile ? Math.min(w * 0.4, h * 0.35) : 220;
+        const halo = radial(w * 0.18, h * 0.32, haloRadius, [
+          [0, 'rgba(250, 204, 21, 0.24)'],
+          [1, 'rgba(250, 204, 21, 0)']
+        ]);
+        ctx.fillStyle = halo;
+        ctx.fillRect(isMobile ? -20 : -40, 0, w * 0.6, h * 0.6);
+
+        const ribbonCount = isMobile ? 3 : 4;
+        const glyphs = ['א', 'ר', 'מ', 'א', 'י', 'ת', 'ב', 'ר', 'י', 'ת'];
+        const ribbonHeight = isMobile ? 14 : 18;
+        const ribbonPadding = isMobile ? 30 : 60;
+        for (let i = 0; i < ribbonCount; i++) {
+          const y = h * (0.18 + i * (isMobile ? 0.25 : 0.2)) + Math.sin(t * 0.7 + i) * (isMobile ? 9 : 14);
+          const ribbon = ctx.createLinearGradient(0, y - ribbonHeight, w, y + ribbonHeight);
+          ribbon.addColorStop(0, 'rgba(234, 179, 8, 0.10)');
+          ribbon.addColorStop(0.5, `rgba(251, 191, 36, ${0.25 + i * 0.04})`);
+          ribbon.addColorStop(1, 'rgba(217, 119, 6, 0.10)');
+          ctx.globalAlpha = 0.8;
+          ctx.fillStyle = ribbon;
+          ctx.fillRect(-ribbonPadding, y - ribbonHeight, w + ribbonPadding * 2, ribbonHeight * 2);
+
+          ctx.save();
+          ctx.globalAlpha = 0.55;
+          ctx.font = isMobile ? `bold ${Math.max(16, w * 0.04)}px Frank Ruhl Libre` : 'bold 26px Frank Ruhl Libre';
+          ctx.fillStyle = 'rgba(255, 224, 138, 0.85)';
+          const glyphCount = isMobile ? 10 : 14;
+          const glyphSpacing = isMobile ? (w / 8) : (w / 12);
+          for (let j = 0; j < glyphCount; j++) {
+            const x = (j * glyphSpacing + t * (isMobile ? 30 : 40) + i * (isMobile ? 50 : 70)) % (w + 60) - 30;
+            const gy = y + (j % 2 === 0 ? (isMobile ? -4 : -6) : (isMobile ? 6 : 10));
+            ctx.fillText(glyphs[(i + j) % glyphs.length], x, gy);
+          }
+          ctx.restore();
+        }
+
+        ctx.globalCompositeOperation = 'lighter';
+        const ellipseCount = isMobile ? 2 : 3;
+        for (let i = 0; i < ellipseCount; i++) {
+          const gx = w * (0.35 + i * (isMobile ? 0.25 : 0.2));
+          const gy = h * 0.78;
+          ctx.strokeStyle = `rgba(251, 191, 36, ${0.18 + i * 0.04})`;
+          ctx.lineWidth = (isMobile ? 1.5 : 2) + i * (isMobile ? 0.4 : 0.6);
+          ctx.beginPath();
+          const rx = isMobile ? (60 + i * 18) : (90 + i * 26);
+          const ry = isMobile ? (18 + i * 5) : (26 + i * 8);
+          ctx.ellipse(gx, gy, rx, ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'mahoza': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#0b1022'],
+          [0.6, '#0d1428'],
+          [1, '#0a0d18']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        const beamCount = isMobile ? 5 : 7;
+        for (let i = 0; i < beamCount; i++) {
+          const x = (i / (beamCount - 1 || 1)) * w + Math.sin(t * 0.45 + i) * (isMobile ? 18 : 28);
+          const beam = linear(0, h, [
+            [0, 'rgba(56, 189, 248, 0)'],
+            [0.35, `rgba(56, 189, 248, ${0.14 + (subPhase % 3) * 0.02})`],
+            [0.65, `rgba(168, 85, 247, ${0.16 + (subPhase % 4) * 0.02})`],
+            [1, 'rgba(59, 130, 246, 0)']
+          ]);
+          ctx.save();
+          ctx.globalAlpha = 0.65;
+          ctx.fillStyle = beam;
+          const width = (isMobile ? 18 : 26) + Math.sin(t * 0.6 + i) * (isMobile ? 6 : 10);
+          ctx.fillRect(x - width / 2, 0, width, h);
+          ctx.restore();
+        }
+
+        ctx.globalCompositeOperation = 'screen';
+        const circleCount = isMobile ? 3 : 4;
+        for (let i = 0; i < circleCount; i++) {
+          const gx = (i * (w / (circleCount - 1 || 1)) + t * (isMobile ? 24 : 32)) % (w + (isMobile ? 80 : 120)) - (isMobile ? 40 : 60);
+          const gy = h * (0.32 + i * (isMobile ? 0.18 : 0.14));
+          ctx.strokeStyle = `rgba(94, 234, 212, ${0.18 + i * 0.04})`;
+          ctx.lineWidth = (isMobile ? 1.4 : 1.8) + i * (isMobile ? 0.3 : 0.4);
+          ctx.beginPath();
+          ctx.arc(gx, gy, (isMobile ? 50 : 70) + i * (isMobile ? 18 : 26), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'matamehasia': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#05050f'],
+          [1, '#090915']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        const cx = w * 0.5;
+        const cy = h * 0.56;
+        const baseR = Math.max(w, h) * (isMobile ? 0.55 : 0.6);
+        ctx.globalCompositeOperation = 'screen';
+        const arcCount = isMobile ? 5 : 7;
+        for (let i = 0; i < arcCount; i++) {
+          const angle = t * 0.4 + i * 0.65;
+          const r = baseR * (1 - i * 0.08);
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(angle * 0.12);
+          ctx.strokeStyle = `rgba(148, 163, 184, ${0.10 + i * 0.03})`;
+          ctx.lineWidth = (isMobile ? 1.0 : 1.2) + i * (isMobile ? 0.4 : 0.5);
+          ctx.beginPath();
+          ctx.arc(0, 0, r, angle, angle + Math.PI * (1.25 + i * 0.08));
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.fillStyle = radial(cx, cy, baseR * 0.55, [
+          [0, 'rgba(59, 130, 246, 0.12)'],
+          [0.5, 'rgba(124, 58, 237, 0.08)'],
+          [1, 'rgba(0, 0, 0, 0)']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'beiradelvat': {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#04101f'],
+          [0.5, '#06263a'],
+          [1, '#041420']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.fillStyle = radial(w * 0.5, h * 0.55, Math.max(w, h) * (isMobile ? 0.65 : 0.7), [
+          [0, 'rgba(34, 211, 238, 0.22)'],
+          [0.4, 'rgba(59, 130, 246, 0.12)'],
+          [1, 'rgba(6, 95, 70, 0)']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.globalCompositeOperation = 'screen';
+        const arcCount = isMobile ? 4 : 5;
+        for (let i = 0; i < arcCount; i++) {
+          const r = Math.max(w, h) * (0.32 + i * 0.08);
+          const start = t * 0.9 + i * 0.7;
+          ctx.strokeStyle = `rgba(125, 211, 252, ${0.14 + i * 0.03})`;
+          ctx.lineWidth = (isMobile ? 1.3 : 1.6) + i * (isMobile ? 0.3 : 0.4);
+          ctx.beginPath();
+          ctx.arc(w / 2, h * 0.52, r, start, start + Math.PI * 1.35);
+          ctx.stroke();
+        }
+
+        if (this.gameFrame % 120 < 16) {
+          const seed = this.gameFrame;
+          const baseX = (seed * 47) % w;
+          ctx.strokeStyle = 'rgba(96, 165, 250, 0.9)';
+          ctx.lineWidth = isMobile ? 1.8 : 2.2;
+          ctx.beginPath();
+          ctx.moveTo(baseX, -20);
+          const lightningPoints = isMobile ? 5 : 6;
+          for (let i = 0; i < lightningPoints; i++) {
+            const y = (i + 1) * (h / (lightningPoints + 1));
+            const x = baseX + Math.sin(seed * 0.2 + i) * (isMobile ? 40 : 60);
+            ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        ctx.globalAlpha = 0.4;
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.35)';
+        const lineCount = isMobile ? 10 : 14;
+        const lineSpacing = w / (isMobile ? 8 : 12);
+        const lineOffset = isMobile ? 20 : 28;
+        for (let i = 0; i < lineCount; i++) {
+          const x = (i * lineSpacing + t * (isMobile ? 65 : 90)) % (w + 60) - 30;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x + lineOffset, h);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        break;
+      }
+      default: {
+        ctx.fillStyle = linear(0, h, [
+          [0, '#0b1324'],
+          [1, '#0a0f1f']
+        ]);
+        ctx.fillRect(0, 0, w, h);
+        ctx.save();
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = '#e2e8f0';
+        const fontSize = isMobile ? Math.max(24, w * 0.06) : 42;
+        ctx.font = `bold ${fontSize}px Frank Ruhl Libre`;
         const letters = ["א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י"];
-        for(let i=0; i<10; i++) {
-          const x = (i * 180 + this.gameFrame * 0.2) % this.width;
-          const y = (i * 140 + this.gameFrame * 0.15) % this.height;
-          this.ctx.fillText(letters[i % letters.length], x, y);
+        const letterCount = isMobile ? 7 : 10;
+        const letterSpacingX = isMobile ? (w / 4) : 180;
+        const letterSpacingY = isMobile ? (h / 5) : 140;
+        for(let i=0; i<letterCount; i++) {
+          const x = (i * letterSpacingX + this.gameFrame * 0.3) % w;
+          const y = (i * letterSpacingY + this.gameFrame * 0.2) % h;
+          ctx.fillText(letters[i % letters.length], x, y);
         }
-        this.ctx.restore();
+        ctx.restore();
+        break;
+      }
     }
+
+    ctx.restore();
   }
+
 
   drawEntities() {
       this.particlePool.forEach(p => { if (p.active) { this.ctx.globalAlpha = p.alpha; this.ctx.fillStyle = p.color; this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill(); } });
@@ -3806,7 +4483,7 @@ export class GameEngine {
                   ); 
               }
           }
-          Sound.play('shoot');
+          Sound.play('boss_shoot');
       }
 
       for (let i = this.bossProjectiles.length - 1; i >= 0; i--) {
@@ -5586,7 +6263,14 @@ export class GameEngine {
 
   fire() {
       if (this.isPaused || this.playerExploding || this.isTransitioning) return;
-      Sound.play('shoot');
+      const shootSfx =
+        this.weaponType === 'fire' ? 'shoot_fire' :
+        this.weaponType === 'beam' ? 'shoot_beam' :
+        this.weaponType === 'electric' ? 'shoot_electric' :
+        this.weaponType === 'missile' ? 'shoot_missile' :
+        this.weaponType === 'laser' ? 'shoot_laser' :
+        'shoot_normal';
+      Sound.play(shootSfx);
       const p = this.projectilePool.find(pr => !pr.active);
       if (p) {
           p.x = this.player.x; p.y = this.player.y - 35; p.vx = 0; p.vy = -20; p.type = this.weaponType; p.active = true; p.angle = 0;
@@ -5639,6 +6323,9 @@ export class GameEngine {
   }
 
   startBossFight() {
+      // Prevent starting a new boss fight if one is already active
+      if (this.boss) return;
+      
       this.bossDamageTaken = false;
       const bossId: BossId = this.bossCycleMode
           ? (BOSS_SEQUENCE[this.bossSequenceIndex] || 'tannina')
@@ -5690,10 +6377,19 @@ export class GameEngine {
 
       if (!this.bossDamageTaken) this.onAchievement('sinai');
       Sound.play('explosion');
-      this.spawnExplosion(this.boss.x, this.boss.y, 'gold', 200); 
-      this.score += 10000; 
+      Sound.play('boss_defeat');
+      
+      // Store boss position before clearing
+      const bossX = this.boss.x;
+      const bossY = this.boss.y;
+      
+      // Clear boss immediately to prevent race conditions
       this.boss = null; 
       this.bossProjectiles = []; 
+      
+      // Spawn explosion and trigger shake after boss is cleared
+      this.spawnExplosion(bossX, bossY, 'gold', 200); 
+      this.score += 10000; 
       this.triggerShake(50);
       
       this.onStatsUpdate({bossActive: false, bossHpPercent: 0, score: this.score, bossName: undefined}); 
