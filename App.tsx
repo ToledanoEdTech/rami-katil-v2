@@ -256,7 +256,7 @@ function App() {
     const loadInitialResources = async () => {
       setIsLoadingGame(true);
       setLoadingProgress(0);
-      setLoadingStatus('טוען תמונות...');
+      setLoadingStatus('טוען משחק...');
       
       const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
       const base = rawBase.replace(/\/$/, '');
@@ -300,7 +300,6 @@ function App() {
       });
       
       await Promise.all(imagePromises);
-      setLoadingStatus('טוען סאונדים...');
       
       // Initialize sound (this loads audio files)
       Sound.init();
@@ -312,7 +311,6 @@ function App() {
       await new Promise(resolve => setTimeout(resolve, 100));
       updateProgress(); // Game music
       
-      setLoadingStatus('מסיים טעינה...');
       await new Promise(resolve => setTimeout(resolve, 200));
       setLoadingProgress(100);
       
@@ -958,7 +956,7 @@ const equipSkin = (id: string) => {
                 opacity: preloadedIntroImages[currentImageIndex]?.complete ? 1 : undefined
               }}
               loading="eager"
-              fetchPriority="high"
+              fetchpriority="high"
               onLoad={() => {
                 // Image loaded successfully
               }}
@@ -997,9 +995,8 @@ const equipSkin = (id: string) => {
       {unlockNotification && (
         <div
           className={`absolute left-1/2 -translate-x-1/2 z-[200] pointer-events-none w-full ${
-            isMobile ? 'top-24 animate-fade-in max-w-[20rem] px-4' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
+            isMobile ? 'top-1/2 -translate-y-1/2 animate-fade-in max-w-[20rem] px-4' : 'bottom-10 animate-bounce-slow max-w-sm px-4'
           }`}
-          style={isMobile ? ({ top: '100px' } as any) : undefined}
         >
           <div className="rk-glass-strong rk-glow border border-amber-400/20 rounded-2xl overflow-hidden">
             <div className="px-3 py-2 md:px-8 md:py-4 flex items-center gap-3 md:gap-6">
@@ -1644,7 +1641,7 @@ const equipSkin = (id: string) => {
                                             transition: isPreloaded ? 'opacity 0.2s ease-in' : undefined
                                           }}
                                           loading="eager"
-                                          fetchPriority="high"
+                                          fetchpriority="high"
                                         />
                                       );
                                     }
@@ -1914,16 +1911,47 @@ const FlameIcon = ({ className = '' }: { className?: string }) => (
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
   >
+    {/* Main flame body - orange/red gradient */}
+    <defs>
+      <linearGradient id="flameGrad" x1="12" y1="2" x2="12" y2="20">
+        <stop offset="0%" stopColor="#FFD700" />
+        <stop offset="30%" stopColor="#FF8C00" />
+        <stop offset="60%" stopColor="#FF4500" />
+        <stop offset="100%" stopColor="#DC143C" />
+      </linearGradient>
+      <linearGradient id="flameInner" x1="12" y1="6" x2="12" y2="16">
+        <stop offset="0%" stopColor="#FFFFFF" />
+        <stop offset="50%" stopColor="#FFD700" />
+        <stop offset="100%" stopColor="#FF8C00" />
+      </linearGradient>
+    </defs>
+    {/* Outer flame - left tongue */}
     <path
-      d="M12 2c1.8 3.6-.8 5.4-1 7.8-.2 2.5 1.7 3.1 2.6 4.8 1.1 2.1.3 5.4-3 6.9C7.4 22.9 4 20.4 4 16.4c0-3.7 2.3-6.2 5.2-8.9.9-.8 1.9-1.7 2.8-2.8z"
-      fill="currentColor"
-      opacity="0.92"
+      d="M10 4 Q8 8 9 12 Q9.5 16 11 18 Q12 19 12 20 L12 22 Q12 20 12 18 Q11 16 10 14 Q9 10 10 6 Z"
+      fill="url(#flameGrad)"
+      opacity="0.95"
     />
+    {/* Outer flame - right tongue */}
     <path
-      d="M12.4 10.1c.7 1.6-.2 2.5-.3 3.6-.1 1.1.7 1.6 1.1 2.3.6 1.1.2 2.7-1.6 3.4-1.7.7-3.4-.5-3.4-2.5 0-1.8 1.2-3 2.2-4 .7-.7 1.3-1.3 2-2.8z"
-      fill="white"
-      opacity="0.18"
+      d="M14 4 Q16 8 15 12 Q14.5 16 13 18 Q12 19 12 20 L12 22 Q12 20 12 18 Q13 16 14 14 Q15 10 14 6 Z"
+      fill="url(#flameGrad)"
+      opacity="0.95"
     />
+    {/* Center flame - main body */}
+    <path
+      d="M12 2 Q11 6 11.5 10 Q12 14 12 18 Q12 20 12 22 L12 20 Q12 18 12.5 14 Q13 10 13 6 Q12.5 4 12 2 Z"
+      fill="url(#flameGrad)"
+      opacity="0.98"
+    />
+    {/* Inner bright core */}
+    <path
+      d="M12 6 Q11.5 9 12 12 Q12.5 15 12 18 Q12 16 12 14 Q12 10 12.5 8 Q12.2 7 12 6 Z"
+      fill="url(#flameInner)"
+      opacity="0.85"
+    />
+    {/* Small flicker flames on sides */}
+    <ellipse cx="9.5" cy="8" rx="1.5" ry="3" fill="#FFD700" opacity="0.7" />
+    <ellipse cx="14.5" cy="8" rx="1.5" ry="3" fill="#FFD700" opacity="0.7" />
   </svg>
 );
 

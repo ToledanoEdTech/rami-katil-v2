@@ -648,6 +648,80 @@ export class GameEngine {
   drawBackgroundTheme() {
     const loc = this.config.location || 'nehardea';
     const subPhase = this.level % 7;
+    const isMobile = this.width < 600;
+    
+    // Special backgrounds for first two stages (level 1 and 2)
+    if (this.level === 1 || this.level === 2) {
+        this.ctx.save();
+        
+        // Deep space gradient background
+        const spaceGrad = this.ctx.createLinearGradient(0, 0, 0, this.height);
+        spaceGrad.addColorStop(0, '#0a0e27');
+        spaceGrad.addColorStop(0.4, '#1a1f3a');
+        spaceGrad.addColorStop(0.7, '#2d1b3d');
+        spaceGrad.addColorStop(1, '#1a0f2e');
+        this.ctx.fillStyle = spaceGrad;
+        this.ctx.fillRect(0, 0, this.width, this.height);
+        
+        // Animated nebula clouds
+        const nebulaAlpha = 0.25 + Math.sin(this.gameFrame * 0.02) * 0.1;
+        for (let i = 0; i < 3; i++) {
+            const offsetX = (this.gameFrame * (0.1 + i * 0.05)) % (this.width + 200) - 100;
+            const offsetY = this.height * (0.2 + i * 0.3);
+            const radius = isMobile ? (80 + i * 40) : (120 + i * 60);
+            
+            const nebulaGrad = this.ctx.createRadialGradient(offsetX, offsetY, 0, offsetX, offsetY, radius);
+            if (i === 0) {
+                nebulaGrad.addColorStop(0, `rgba(88, 28, 135, ${nebulaAlpha})`);
+                nebulaGrad.addColorStop(1, 'transparent');
+            } else if (i === 1) {
+                nebulaGrad.addColorStop(0, `rgba(59, 130, 246, ${nebulaAlpha * 0.7})`);
+                nebulaGrad.addColorStop(1, 'transparent');
+            } else {
+                nebulaGrad.addColorStop(0, `rgba(139, 92, 246, ${nebulaAlpha * 0.6})`);
+                nebulaGrad.addColorStop(1, 'transparent');
+            }
+            this.ctx.fillStyle = nebulaGrad;
+            this.ctx.beginPath();
+            this.ctx.arc(offsetX, offsetY, radius, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        // Twinkling stars
+        this.ctx.globalAlpha = 0.8;
+        this.ctx.fillStyle = '#ffffff';
+        const starCount = isMobile ? 30 : 50;
+        for (let i = 0; i < starCount; i++) {
+            const seed = i * 137.5; // Golden angle for distribution
+            const x = (seed * 0.618) % this.width;
+            const y = (seed * 0.382) % this.height;
+            const twinkle = Math.sin(this.gameFrame * 0.1 + i) * 0.5 + 0.5;
+            const size = (1 + twinkle) * (isMobile ? 1 : 1.5);
+            this.ctx.globalAlpha = 0.4 + twinkle * 0.4;
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, size, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        // Distant glowing orbs
+        this.ctx.globalAlpha = 0.3;
+        for (let i = 0; i < 2; i++) {
+            const orbX = this.width * (0.25 + i * 0.5) + Math.sin(this.gameFrame * 0.03 + i) * 30;
+            const orbY = this.height * 0.3;
+            const orbGrad = this.ctx.createRadialGradient(orbX, orbY, 0, orbX, orbY, isMobile ? 40 : 60);
+            orbGrad.addColorStop(0, 'rgba(251, 191, 36, 0.6)');
+            orbGrad.addColorStop(0.5, 'rgba(251, 191, 36, 0.2)');
+            orbGrad.addColorStop(1, 'transparent');
+            this.ctx.fillStyle = orbGrad;
+            this.ctx.beginPath();
+            this.ctx.arc(orbX, orbY, isMobile ? 40 : 60, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        
+        this.ctx.restore();
+        return;
+    }
+    
     if (loc === 'nehardea') {
         const blueVal = 138 + (subPhase * 15);
         const grad = this.ctx.createLinearGradient(0, this.height - 200, 0, this.height);
@@ -1429,7 +1503,10 @@ export class GameEngine {
 
   updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
-      b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
+      b.frame += dt; 
+      // Smooth boss movement using lerp to reduce jitter
+      const targetX = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
+      b.x = b.x + (targetX - b.x) * 0.15; // Smooth interpolation
       if(b.y < b.targetY) b.y += 0.9 * dt;
 
       b.timer = (b.timer || 0) + dt;

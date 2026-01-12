@@ -2653,6 +2653,91 @@ export class GameEngine {
 
     ctx.save();
 
+    // CRITICAL: Special backgrounds for first two stages (sugiot) - ALWAYS use space background
+    // Force stage 2 (level 8) to use same background as stage 1 (level 1)
+    // This check MUST come FIRST, before any location-based logic
+    // Check level directly - ignore location for first two sugiot
+    // IMPORTANT: First sugia is levels 1-7, second sugia starts at level 8
+    // We check the level number directly to ensure first two sugiot always get space background
+    const levelNum = this.level;
+    if (levelNum <= 8) {
+        // Deep space gradient background
+        const spaceGrad = linear(0, h, [
+          [0, '#0a0e27'],
+          [0.4, '#1a1f3a'],
+          [0.7, '#2d1b3d'],
+          [1, '#1a0f2e']
+        ]);
+        ctx.fillStyle = spaceGrad;
+        ctx.fillRect(0, 0, w, h);
+        
+        // Animated nebula clouds
+        const nebulaAlpha = 0.25 + Math.sin(this.gameFrame * 0.02) * 0.1;
+        for (let i = 0; i < 3; i++) {
+            const offsetX = (this.gameFrame * (0.1 + i * 0.05) * (isMobile ? 40 : 60)) % (w + 200) - 100;
+            const offsetY = h * (0.2 + i * 0.3);
+            const radius = isMobile ? (80 + i * 40) : (120 + i * 60);
+            
+            let nebulaGrad: CanvasGradient;
+            if (i === 0) {
+                nebulaGrad = radial(offsetX, offsetY, radius, [
+                  [0, `rgba(88, 28, 135, ${nebulaAlpha})`],
+                  [1, 'transparent']
+                ]);
+            } else if (i === 1) {
+                nebulaGrad = radial(offsetX, offsetY, radius, [
+                  [0, `rgba(59, 130, 246, ${nebulaAlpha * 0.7})`],
+                  [1, 'transparent']
+                ]);
+            } else {
+                nebulaGrad = radial(offsetX, offsetY, radius, [
+                  [0, `rgba(139, 92, 246, ${nebulaAlpha * 0.6})`],
+                  [1, 'transparent']
+                ]);
+            }
+            ctx.fillStyle = nebulaGrad;
+            ctx.beginPath();
+            ctx.arc(offsetX, offsetY, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Twinkling stars
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#ffffff';
+        const starCount = isMobile ? 30 : 50;
+        for (let i = 0; i < starCount; i++) {
+            const seed = i * 137.5; // Golden angle for distribution
+            const x = (seed * 0.618) % w;
+            const y = (seed * 0.382) % h;
+            const twinkle = Math.sin(this.gameFrame * 0.1 + i) * 0.5 + 0.5;
+            const size = (1 + twinkle) * (isMobile ? 1 : 1.5);
+            ctx.globalAlpha = 0.4 + twinkle * 0.4;
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Distant glowing orbs
+        ctx.globalAlpha = 0.3;
+        for (let i = 0; i < 2; i++) {
+            const orbX = w * (0.25 + i * 0.5) + Math.sin(this.gameFrame * 0.03 + i) * (isMobile ? 20 : 30);
+            const orbY = h * 0.3;
+            const orbGrad = radial(orbX, orbY, isMobile ? 40 : 60, [
+              [0, 'rgba(251, 191, 36, 0.6)'],
+              [0.5, 'rgba(251, 191, 36, 0.2)'],
+              [1, 'transparent']
+            ]);
+            ctx.fillStyle = orbGrad;
+            ctx.beginPath();
+            ctx.arc(orbX, orbY, isMobile ? 40 : 60, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        return; // IMPORTANT: Return early to prevent any other background code from running
+    }
+
     switch (loc) {
       case 'nehardea': {
         ctx.fillStyle = linear(0, h, [
@@ -4384,7 +4469,10 @@ export class GameEngine {
 
   updateBoss(dt: number) {
       const b = this.boss; if (!b) return;
-      b.frame += dt; b.x = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
+      b.frame += dt; 
+      // Smooth boss movement using lerp to reduce jitter
+      const targetX = (this.width/2) + Math.sin(b.frame*0.012)*(this.width/4.5);
+      b.x = b.x + (targetX - b.x) * 0.15; // Smooth interpolation
       if(b.y < b.targetY) b.y += 0.9 * dt;
 
       b.timer = (b.timer || 0) + dt;
