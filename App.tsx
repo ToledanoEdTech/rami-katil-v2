@@ -55,6 +55,9 @@ function App() {
   const [showIntroBeforeGame, setShowIntroBeforeGame] = useState(false);
   const [preloadedIntroImages, setPreloadedIntroImages] = useState<HTMLImageElement[]>([]);
   const [preloadedShopImages, setPreloadedShopImages] = useState<Record<string, HTMLImageElement>>({});
+  const [isLoadingGame, setIsLoadingGame] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStatus, setLoadingStatus] = useState('טוען...');
   const [coins, setCoins] = useState(safeInt('coins', 0));
   const [isPaused, setIsPaused] = useState(false);
   const [displayScore, setDisplayScore] = useState(0);
@@ -248,13 +251,86 @@ function App() {
     setPreloadedShopImages(images);
   }, []);
 
-  // Initial fetch
+  // Initial load - Load all resources on app start
   useEffect(() => {
-    fetchData();
-    Sound.init();
-    const checkMobileByUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const checkMobileByWidth = window.innerWidth < 768; // גם מזהה לפי רוחב מסך
-    setIsMobile(checkMobileByUA || checkMobileByWidth);
+    const loadInitialResources = async () => {
+      setIsLoadingGame(true);
+      setLoadingProgress(0);
+      setLoadingStatus('טוען תמונות...');
+      
+      const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+      const base = rawBase.replace(/\/$/, '');
+      const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
+      
+      // List of all game images that need to be loaded
+      const gameImages = [
+        'ships/skin_default.png', 'ships/default.png',
+        'ships/skin_gold.png', 'ships/gold.png',
+        'ships/skin_butzina.png', 'ships/butzina.png',
+        'ships/torah.png', 'ships/choshen.png',
+        'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png',
+        'logo.png',
+        // Intro images
+        ...INTRO_IMAGES.map(img => img.replace(/^\//, ''))
+      ];
+      
+      const totalResources = gameImages.length + 3; // Images + 3 audio files
+      let loaded = 0;
+      
+      const updateProgress = (increment: number = 1) => {
+        loaded += increment;
+        const progress = Math.min(100, Math.round((loaded / totalResources) * 100));
+        setLoadingProgress(progress);
+      };
+      
+      // Load all images
+      const imagePromises = gameImages.map((imgPath) => {
+        return new Promise<void>((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            updateProgress();
+            resolve();
+          };
+          img.onerror = () => {
+            updateProgress(); // Still count as loaded even if error
+            resolve();
+          };
+          img.src = url(imgPath);
+        });
+      });
+      
+      await Promise.all(imagePromises);
+      setLoadingStatus('טוען סאונדים...');
+      
+      // Initialize sound (this loads audio files)
+      Sound.init();
+      updateProgress(); // Audio context
+      
+      // Wait a bit for audio files to start loading
+      await new Promise(resolve => setTimeout(resolve, 100));
+      updateProgress(); // Menu music
+      await new Promise(resolve => setTimeout(resolve, 100));
+      updateProgress(); // Game music
+      
+      setLoadingStatus('מסיים טעינה...');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setLoadingProgress(100);
+      
+      setIsLoadingGame(false);
+      
+      // After loading, initialize the app
+      fetchData();
+      const checkMobileByUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const checkMobileByWidth = window.innerWidth < 768;
+      setIsMobile(checkMobileByUA || checkMobileByWidth);
+      
+      // התחלת מוזיקת תפריט אחרי הטעינה
+      if (gameState === 'MENU') {
+        Sound.playMenuMusic();
+      }
+    };
+    
+    loadInitialResources();
     
     // עדכון דינמי כשהחלון משנה גודל
     const handleResize = () => {
@@ -263,59 +339,6 @@ function App() {
     };
     
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-
-    // Preload ship + item images to avoid first-frame flicker when starting a game
-    // Also preload intro images aggressively for faster display
-    try {
-      const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
-      const base = rawBase.replace(/\/$/, '');
-      const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
-      
-      // Helper function to preload an image with promise
-      const preloadImage = (src: string): Promise<void> => {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.decoding = 'async';
-          img.onload = () => resolve();
-          img.onerror = () => resolve(); // Don't fail on missing images
-          img.src = src;
-        });
-      };
-      
-      const allImages = [
-        // Ship skins (candidates used by GameEngine + shop cards)
-        'ships/skin_default.png', 'ships/default.png',
-        'ships/skin_gold.png', 'ships/gold.png',
-        'ships/skin_butzina.png', 'ships/butzina.png',
-        'ships/torah.png', 'ships/choshen.png',
-        // Items (shop)
-        'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png',
-        // Logo
-        'logo.png',
-        // Intro images - preload these first for faster display
-        ...INTRO_IMAGES.map(img => img.replace(/^\//, ''))
-      ];
-      
-      // Preload all images, prioritizing intro images
-      const introImages = INTRO_IMAGES.map(img => img.replace(/^\//, ''));
-      const otherImages = allImages.filter(img => !introImages.includes(img));
-      
-      // Load intro images first, then others
-      Promise.all([
-        ...introImages.map(p => preloadImage(url(p))),
-        ...otherImages.map(p => preloadImage(url(p)))
-      ]).catch(() => {
-        // Ignore errors, continue anyway
-      });
-    } catch {
-      // ignore
-    }
-    
-    // התחלת מוזיקת תפריט בטעינה ראשונית
-    if (gameState === 'MENU') {
-      Sound.playMenuMusic();
-    }
 
     // הוספת האזנה לכל אינטראקציה כדי לשחרר את חסימת האודיו של הדפדפן
     const unlockAudio = () => {
@@ -337,11 +360,12 @@ function App() {
     window.addEventListener('keydown', unlockAudio);
 
     return () => {
+      window.removeEventListener('resize', handleResize);
       window.removeEventListener('click', unlockAudio);
       window.removeEventListener('touchstart', unlockAudio);
       window.removeEventListener('keydown', unlockAudio);
     };
-  }, [fetchData]);
+  }, []);
 
   // Handle URL Parameter after data is fetched
   useEffect(() => {
@@ -431,6 +455,7 @@ function App() {
         animationFrameId.current = requestAnimationFrame(gameLoop);
     }
   }, []);
+
 
   const startGame = (sugia?: Sugia, skipIntro: boolean = false) => {
     Sound.play('ui_click');
@@ -860,10 +885,51 @@ const equipSkin = (id: string) => {
       dir="rtl"
       style={{ touchAction: gameState === 'PLAYING' ? 'none' : 'auto' }}
     >
+      {/* Loading Screen */}
+      {isLoadingGame && (
+        <div className="absolute inset-0 z-[300] bg-slate-950 flex flex-col items-center justify-center">
+          <div className="text-center px-4">
+            <h2 className="text-3xl md:text-6xl font-aramaic mb-8 md:mb-12 text-amber-400 drop-shadow-2xl">
+              {loadingStatus}
+            </h2>
+            
+            {/* Progress Bar Container */}
+            <div className="w-full max-w-md mx-auto mb-4">
+              <div className="rk-glass rounded-full border border-slate-700/60 overflow-hidden" style={{ height: isMobile ? '24px' : '32px' }}>
+                <div 
+                  className="h-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 transition-all duration-300 ease-out flex items-center justify-end pr-2"
+                  style={{ width: `${loadingProgress}%` }}
+                >
+                  {loadingProgress > 15 && (
+                    <span className="text-xs md:text-sm font-black text-slate-900 tabular-nums">
+                      {loadingProgress}%
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Loading Animation */}
+            <div className="flex gap-2 justify-center mt-6">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="w-3 h-3 bg-amber-400 rounded-full animate-pulse"
+                  style={{
+                    animationDelay: `${i * 0.2}s`,
+                    animationDuration: '1s'
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <canvas ref={canvasRef} className="block w-full h-full" />
 
-      {/* Animated menu/backdrop (CSS) */}
-      {gameState !== 'PLAYING' && gameState !== 'INTRO' && (
+      {/* Animated menu/backdrop (CSS) - Only show after loading is complete */}
+      {!isLoadingGame && gameState !== 'PLAYING' && gameState !== 'INTRO' && (
         <Backdrop mode={gameState === 'MENU' ? 'menu' : 'default'} showShips={gameState === 'MENU'} />
       )}
 
@@ -1124,7 +1190,7 @@ const equipSkin = (id: string) => {
           </div>
       )}
 
-      {gameState === 'MENU' && (
+      {!isLoadingGame && gameState === 'MENU' && (
           <div className="absolute inset-0 flex items-center justify-center h-full">
               <div className="relative z-20 flex flex-col items-center p-4 md:p-8 w-[min(92vw,40rem)] text-center overflow-y-auto max-h-[92vh] scrollbar-hide rk-glass-strong rk-glow rounded-[2rem] md:rounded-[2.5rem]">
                   <h1 className="font-aramaic text-5xl md:text-9xl rk-neon-title mb-1 md:mb-4 animate-bounce-slow tracking-tight">
