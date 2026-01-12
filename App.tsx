@@ -53,6 +53,7 @@ function App() {
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showIntroBeforeGame, setShowIntroBeforeGame] = useState(false);
+  const [preloadedIntroImages, setPreloadedIntroImages] = useState<HTMLImageElement[]>([]);
   const [coins, setCoins] = useState(safeInt('coins', 0));
   const [isPaused, setIsPaused] = useState(false);
   const [displayScore, setDisplayScore] = useState(0);
@@ -156,6 +157,45 @@ function App() {
     }
   }, []);
 
+  // Preload intro images immediately on mount for instant display
+  useEffect(() => {
+    const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+    const base = rawBase.replace(/\/$/, '');
+    const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
+    
+    // Preload all intro images immediately and store them as Image objects
+    // Start loading all images in parallel for maximum speed
+    const images: HTMLImageElement[] = new Array(INTRO_IMAGES.length);
+    
+    INTRO_IMAGES.forEach((imgPath, index) => {
+      const img = new Image();
+      img.loading = 'eager';
+      img.decoding = 'async';
+      img.fetchPriority = 'high';
+      img.onload = () => {
+        // Update the specific image in the array
+        setPreloadedIntroImages(prev => {
+          const newImages = [...prev];
+          newImages[index] = img;
+          return newImages;
+        });
+      };
+      img.onerror = () => {
+        // Still store the image even on error, so we can fallback to src
+        setPreloadedIntroImages(prev => {
+          const newImages = [...prev];
+          newImages[index] = img;
+          return newImages;
+        });
+      };
+      img.src = url(imgPath.replace(/^\//, ''));
+      images[index] = img;
+    });
+    
+    // Set initial array so we have the structure ready
+    setPreloadedIntroImages(images);
+  }, []);
+
   // Initial fetch
   useEffect(() => {
     fetchData();
@@ -174,11 +214,24 @@ function App() {
     return () => window.removeEventListener('resize', handleResize);
 
     // Preload ship + item images to avoid first-frame flicker when starting a game
+    // Also preload intro images aggressively for faster display
     try {
       const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
       const base = rawBase.replace(/\/$/, '');
       const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
-      [
+      
+      // Helper function to preload an image with promise
+      const preloadImage = (src: string): Promise<void> => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.decoding = 'async';
+          img.onload = () => resolve();
+          img.onerror = () => resolve(); // Don't fail on missing images
+          img.src = src;
+        });
+      };
+      
+      const allImages = [
         // Ship skins (candidates used by GameEngine + shop cards)
         'ships/skin_default.png', 'ships/default.png',
         'ships/skin_gold.png', 'ships/gold.png',
@@ -188,12 +241,20 @@ function App() {
         'ships/bomb.png', 'ships/shield.png', 'ships/freeze.png',
         // Logo
         'logo.png',
-        // Intro images
+        // Intro images - preload these first for faster display
         ...INTRO_IMAGES.map(img => img.replace(/^\//, ''))
-      ].forEach((p) => {
-        const img = new Image();
-        img.decoding = 'async';
-        img.src = url(p);
+      ];
+      
+      // Preload all images, prioritizing intro images
+      const introImages = INTRO_IMAGES.map(img => img.replace(/^\//, ''));
+      const otherImages = allImages.filter(img => !introImages.includes(img));
+      
+      // Load intro images first, then others
+      Promise.all([
+        ...introImages.map(p => preloadImage(url(p))),
+        ...otherImages.map(p => preloadImage(url(p)))
+      ]).catch(() => {
+        // Ignore errors, continue anyway
       });
     } catch {
       // ignore
@@ -319,16 +380,22 @@ function App() {
     }
   }, []);
 
-  const startGame = (sugia?: Sugia) => {
-    // Show intro before starting the game
-    setShowIntroBeforeGame(true);
-    setCurrentImageIndex(0);
-    setGameState('INTRO');
+  const startGame = (sugia?: Sugia, skipIntro: boolean = false) => {
     Sound.play('ui_click');
     
-    // Store game config to start after intro
+    // Store game config
     const dictionaryToUse = customWordList || fullDictionary.filter(w => w.cat === config.category);
     (window as any).pendingGameConfig = { sugia, dictionaryToUse };
+    
+    if (skipIntro) {
+      // Skip intro and start game directly
+      actuallyStartGame(sugia);
+    } else {
+      // Show intro before starting the game
+      setShowIntroBeforeGame(true);
+      setCurrentImageIndex(0);
+      setGameState('INTRO');
+    }
   };
 
   const actuallyStartGame = (sugia?: Sugia) => {
@@ -477,6 +544,23 @@ function App() {
   useEffect(() => {
     if (gameState !== 'INTRO' || INTRO_IMAGES.length === 0) return;
 
+    // Preload next image if available
+    if (currentImageIndex < INTRO_IMAGES.length - 1 && !preloadedIntroImages[currentImageIndex + 1]) {
+      const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+      const base = rawBase.replace(/\/$/, '');
+      const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
+      
+      const img = new Image();
+      img.loading = 'eager';
+      img.decoding = 'async';
+      img.src = url(INTRO_IMAGES[currentImageIndex + 1].replace(/^\//, ''));
+      setPreloadedIntroImages(prev => {
+        const newImages = [...prev];
+        newImages[currentImageIndex + 1] = img;
+        return newImages;
+      });
+    }
+
     const timer = setTimeout(() => {
       if (currentImageIndex < INTRO_IMAGES.length - 1) {
         setCurrentImageIndex(currentImageIndex + 1);
@@ -501,7 +585,7 @@ function App() {
     }, 5000); // 5 seconds per image
 
     return () => clearTimeout(timer);
-  }, [gameState, currentImageIndex]);
+  }, [gameState, currentImageIndex, preloadedIntroImages]);
 
   // Play intro music when intro starts
   useEffect(() => {
@@ -744,16 +828,19 @@ const equipSkin = (id: string) => {
 
           {/* Image Container */}
           <div className="relative w-full h-full flex items-center justify-center">
-            {/* Current Image */}
+            {/* Current Image - Use preloaded image if available for instant display */}
             <img
               key={currentImageIndex}
-              src={INTRO_IMAGES[currentImageIndex]}
+              src={preloadedIntroImages[currentImageIndex]?.src || INTRO_IMAGES[currentImageIndex]}
               alt={`Intro ${currentImageIndex + 1}`}
               className={`w-full h-full ${isMobile ? 'object-contain' : 'object-cover'}`}
               style={{ 
-                animation: 'fadeIn 0.5s ease-in',
-                display: 'block'
+                animation: preloadedIntroImages[currentImageIndex]?.complete ? 'fadeIn 0.2s ease-in' : 'fadeIn 0.5s ease-in',
+                display: 'block',
+                opacity: preloadedIntroImages[currentImageIndex]?.complete ? 1 : undefined
               }}
+              loading="eager"
+              fetchPriority="high"
               onLoad={() => {
                 // Image loaded successfully
               }}
@@ -1559,7 +1646,7 @@ const equipSkin = (id: string) => {
                   </div>
               </div>
               <div className="flex gap-2 md:gap-4 w-full max-w-md pb-12 md:pb-0">
-                  <button onClick={() => startGame(selectedSugia || undefined)} className="rk-btn rk-btn-primary flex-1 text-sm md:text-xl">שוב</button>
+                  <button onClick={() => startGame(selectedSugia || undefined, true)} className="rk-btn rk-btn-primary flex-1 text-sm md:text-xl">שוב</button>
                   <button onClick={() => { if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current); engineRef.current = null; Sound.play('ui_click'); setGameState('MAP'); }} className="rk-btn rk-btn-muted flex-1 text-sm md:text-xl">מפה</button>
                   <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted flex-1 text-sm md:text-xl">תפריט</button>
               </div>
