@@ -1673,7 +1673,7 @@ export class GameEngine {
 
     Object.entries(imageCandidates).forEach(([skin, candidates]) => {
       this.shipTextures[skin] = null;
-      this.shipTextureStatus[skin] = 'idle';
+      this.shipTextureStatus[skin] = 'loading';
       this.shipEnhancedTextures[skin] = null;
       this.shipEngineGlowSprites[skin] = null;
       this.shipAuraSprites[skin] = null;
@@ -3474,6 +3474,13 @@ export class GameEngine {
       const texture = this.shipTextures[skin];
       if (texture && texture.complete && texture.naturalWidth > 0) {
           this.renderShipWithTexture(texture, skin, scale);
+          return;
+      }
+
+      // Don't render old procedural fallback if texture is still loading
+      const status = this.shipTextureStatus[skin];
+      if (status === 'idle' || status === 'loading') {
+          // Texture is still loading, don't show old ship - just return
           return;
       }
 
