@@ -54,6 +54,7 @@ function App() {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showIntroBeforeGame, setShowIntroBeforeGame] = useState(false);
   const [preloadedIntroImages, setPreloadedIntroImages] = useState<HTMLImageElement[]>([]);
+  const [preloadedShopImages, setPreloadedShopImages] = useState<Record<string, HTMLImageElement>>({});
   const [coins, setCoins] = useState(safeInt('coins', 0));
   const [isPaused, setIsPaused] = useState(false);
   const [displayScore, setDisplayScore] = useState(0);
@@ -194,6 +195,57 @@ function App() {
     
     // Set initial array so we have the structure ready
     setPreloadedIntroImages(images);
+  }, []);
+
+  // Preload shop images immediately on mount for instant display
+  useEffect(() => {
+    const rawBase = ((import.meta as any).env?.BASE_URL as string | undefined) || '/';
+    const base = rawBase.replace(/\/$/, '');
+    const url = (p: string) => `${base}/${p.replace(/^\//, '')}`;
+    
+    // Shop images mapping
+    const shopImageMap: Record<string, string> = {
+      'skin_default': 'ships/default.png',
+      'skin_gold': 'ships/gold.png',
+      'skin_torah': 'ships/torah.png',
+      'skin_butzina': 'ships/butzina.png',
+      'skin_choshen': 'ships/choshen.png',
+      'upgrade_bomb': 'ships/bomb.png',
+      'item_shield': 'ships/shield.png',
+      'item_freeze': 'ships/freeze.png'
+    };
+    
+    // Preload all shop images immediately and store them right away
+    const images: Record<string, HTMLImageElement> = {};
+    
+    Object.entries(shopImageMap).forEach(([key, imgPath]) => {
+      const img = new Image();
+      img.loading = 'eager';
+      img.decoding = 'async';
+      img.fetchPriority = 'high';
+      img.onload = () => {
+        // Update when loaded to mark as complete
+        setPreloadedShopImages(prev => ({
+          ...prev,
+          [key]: img
+        }));
+      };
+      img.onerror = () => {
+        // Still store the image even on error
+        setPreloadedShopImages(prev => ({
+          ...prev,
+          [key]: img
+        }));
+      };
+      img.src = url(imgPath);
+      images[key] = img;
+    });
+    
+    // Set all images immediately so they're available right away
+    setPreloadedShopImages(images);
+    
+    // Set initial object so we have the structure ready
+    setPreloadedShopImages(images);
   }, []);
 
   // Initial fetch
@@ -1491,31 +1543,44 @@ const equipSkin = (id: string) => {
                               <div className={`${isMobile ? 'mt-0.5' : 'mt-4'} rk-item-frame rk-tilt-layer`} style={{ ['--z' as any]: '34px' } as any}>
                                 <div className="rk-item-frame-inner">
                                   {(() => {
-                                    if (item.type === 'skin') {
+                                    // Get image source - use preloaded image if available for instant display
+                                    const getImageSrc = () => {
+                                      if (preloadedShopImages[item.id]?.src) {
+                                        return preloadedShopImages[item.id].src;
+                                      }
+                                      if (item.type === 'skin') {
+                                        if (item.id === 'skin_default') return '/ships/default.png';
+                                        if (item.id === 'skin_gold') return '/ships/gold.png';
+                                        if (item.id === 'skin_torah') return '/ships/torah.png';
+                                        if (item.id === 'skin_butzina') return '/ships/butzina.png';
+                                        if (item.id === 'skin_choshen') return '/ships/choshen.png';
+                                      }
+                                      if (item.id === 'upgrade_bomb') return '/ships/bomb.png';
+                                      if (item.id === 'item_shield') return '/ships/shield.png';
+                                      if (item.id === 'item_freeze') return '/ships/freeze.png';
+                                      return undefined;
+                                    };
+
+                                    const imageSrc = getImageSrc();
+                                    
+                                    if (imageSrc) {
+                                      const isPreloaded = preloadedShopImages[item.id]?.complete;
                                       return (
                                         <img
-                                          src={
-                                            item.id === 'skin_default' ? '/ships/default.png' :
-                                            item.id === 'skin_gold' ? '/ships/gold.png' :
-                                            item.id === 'skin_torah' ? '/ships/torah.png' :
-                                            item.id === 'skin_butzina' ? '/ships/butzina.png' :
-                                            item.id === 'skin_choshen' ? '/ships/choshen.png' : undefined
-                                          }
+                                          src={imageSrc}
                                           alt={item.name}
                                           draggable={false}
-                                          className={`${isMobile ? 'w-16 h-16' : 'w-32 h-32 md:w-56 md:h-56'} object-contain drop-shadow-2xl`}
-                                          style={{ imageRendering: 'auto', objectFit: 'contain' }}
+                                          className={`${isMobile ? (item.type === 'skin' ? 'w-16 h-16' : 'w-14 h-14') : (item.type === 'skin' ? 'w-32 h-32 md:w-56 md:h-56' : 'w-28 h-28 md:w-52 md:h-52')} object-contain drop-shadow-2xl`}
+                                          style={{ 
+                                            imageRendering: 'auto', 
+                                            objectFit: 'contain',
+                                            opacity: isPreloaded ? 1 : undefined,
+                                            transition: isPreloaded ? 'opacity 0.2s ease-in' : undefined
+                                          }}
+                                          loading="eager"
+                                          fetchPriority="high"
                                         />
                                       );
-                                    }
-                                    if (item.id === 'upgrade_bomb') {
-                                      return <img src={'/ships/bomb.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
-                                    }
-                                    if (item.id === 'item_shield') {
-                                      return <img src={'/ships/shield.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
-                                    }
-                                    if (item.id === 'item_freeze') {
-                                      return <img src={'/ships/freeze.png'} alt={item.name} draggable={false} className={`${isMobile ? 'w-14 h-14' : 'w-28 h-28 md:w-52 md:h-52'} object-contain drop-shadow-2xl`} />;
                                     }
                                     return <div className={`${isMobile ? 'text-2xl' : 'text-6xl md:text-8xl'} drop-shadow-2xl`}>{item.icon}</div>;
                                   })()}
