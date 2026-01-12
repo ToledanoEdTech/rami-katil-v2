@@ -949,11 +949,18 @@ const equipSkin = (id: string) => {
               key={currentImageIndex}
               src={preloadedIntroImages[currentImageIndex]?.src || INTRO_IMAGES[currentImageIndex]}
               alt={`Intro ${currentImageIndex + 1}`}
-              className={`w-full h-full ${isMobile ? 'object-contain' : 'object-cover'}`}
+              className={`w-full h-full ${isMobile ? 'object-contain' : (currentImageIndex === 4 ? 'object-cover' : 'object-cover')}`}
               style={{ 
                 animation: preloadedIntroImages[currentImageIndex]?.complete ? 'fadeIn 0.2s ease-in' : 'fadeIn 0.5s ease-in',
                 display: 'block',
-                opacity: preloadedIntroImages[currentImageIndex]?.complete ? 1 : undefined
+                opacity: preloadedIntroImages[currentImageIndex]?.complete ? 1 : undefined,
+                ...(currentImageIndex === 4 && !isMobile ? {
+                  objectPosition: 'center',
+                  minWidth: '100%',
+                  minHeight: '100%',
+                  width: '100%',
+                  height: '100%'
+                } : {})
               }}
               loading="eager"
               fetchpriority="high"
