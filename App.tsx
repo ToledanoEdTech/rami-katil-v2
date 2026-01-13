@@ -1642,7 +1642,7 @@ const equipSkin = (id: string) => {
                                           src={imageSrc}
                                           alt={item.name}
                                           draggable={false}
-                                          className={`${isMobile ? (item.type === 'skin' ? 'w-16 h-16' : 'w-14 h-14') : (item.type === 'skin' ? 'w-32 h-32 md:w-56 md:h-56' : 'w-28 h-28 md:w-52 md:h-52')} object-contain drop-shadow-2xl`}
+                                          className={`${isMobile ? (item.type === 'skin' ? 'w-32 h-32' : 'w-28 h-28') : (item.type === 'skin' ? 'w-32 h-32 md:w-56 md:h-56' : 'w-28 h-28 md:w-52 md:h-52')} object-contain drop-shadow-2xl`}
                                           style={{ 
                                             imageRendering: 'auto', 
                                             objectFit: 'contain',
