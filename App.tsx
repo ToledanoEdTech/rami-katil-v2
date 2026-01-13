@@ -66,6 +66,7 @@ function App() {
   const [maxLevelReached, setMaxLevelReached] = useState(() => safeInt('maxLevel', 1));
   const [selectedSugia, setSelectedSugia] = useState<Sugia | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const [customWordList, setCustomWordList] = useState<Word[] | null>(null);
   const [dynamicWords, setDynamicWords] = useState<Word[]>([]);
   const [hasFetched, setHasFetched] = useState(false);
@@ -104,6 +105,7 @@ function App() {
   });
 
   const [feedback, setFeedback] = useState<{msg: string, isGood: boolean} | null>(null);
+  const [wordMeaning, setWordMeaning] = useState<{aramaic: string, hebrew: string} | null>(null);
   const [config, setConfig] = useState<GameConfig>({
       difficulty: 'medium',
       category: 'common',
@@ -562,6 +564,10 @@ function App() {
                   setTransitionStats(s);
                   setIsUnitComplete(true);
                   Sound.play('powerup');
+              },
+              onShowWordMeaning: (aramaic: string, hebrew: string) => {
+                  setWordMeaning({aramaic, hebrew});
+                  setTimeout(() => setWordMeaning(null), 2000);
               }
           }
       );
@@ -691,6 +697,11 @@ function App() {
       prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
     );
     Sound.play('ui_click');
+  };
+
+  const toggleMute = () => {
+    const muted = Sound.toggleMute();
+    setIsMuted(muted);
   };
 
   useEffect(() => {
@@ -1196,9 +1207,32 @@ const equipSkin = (id: string) => {
           </div>
       )}
 
+      {wordMeaning && gameState === 'PLAYING' && (
+          <div className="fixed inset-0 w-full h-full flex items-center justify-center z-[200] pointer-events-none">
+              <div className="rk-glass-strong rk-glow rounded-2xl md:rounded-3xl p-6 md:p-10 min-w-[280px] md:min-w-[400px] max-w-[90vw] backdrop-blur-xl border-2 border-amber-400/30 shadow-2xl animate-fade-in text-center mx-auto">
+                  <div className="text-amber-400 text-sm md:text-base font-semibold mb-3 md:mb-4 tracking-wide">
+                      הפירוש הנכון:
+                  </div>
+                  <div className="font-aramaic text-3xl md:text-5xl font-bold text-white mb-3 md:mb-4 drop-shadow-lg">
+                      {wordMeaning.aramaic}
+                  </div>
+                  <div className="text-2xl md:text-4xl font-bold text-amber-300 drop-shadow-lg">
+                      {wordMeaning.hebrew}
+                  </div>
+              </div>
+          </div>
+      )}
+
       {!isLoadingGame && gameState === 'MENU' && (
           <div className="absolute inset-0 flex items-center justify-center h-full">
               <div className="relative z-20 flex flex-col items-center p-4 md:p-8 w-[min(92vw,40rem)] text-center overflow-y-auto max-h-[92vh] scrollbar-hide rk-glass-strong rk-glow rounded-[2rem] md:rounded-[2.5rem]">
+                  <button
+                    onClick={toggleMute}
+                    className="absolute top-4 left-4 md:top-6 md:left-6 w-10 h-10 md:w-12 md:h-12 bg-slate-800/60 hover:bg-slate-700/80 rounded-full flex items-center justify-center text-xl md:text-2xl border border-slate-600/50 hover:border-slate-500 transition-all active:scale-90"
+                    aria-label={isMuted ? "הפעל קול" : "השתק קול"}
+                  >
+                    {isMuted ? '🔇' : '🔊'}
+                  </button>
                   <h1 className="font-aramaic text-5xl md:text-9xl rk-neon-title mb-1 md:mb-4 animate-bounce-slow tracking-tight">
                       רמי וקטיל
                   </h1>

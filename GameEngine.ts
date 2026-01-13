@@ -48,6 +48,7 @@ export class GameEngine {
   height: number;
   activeDictionary: Word[] = [];
   currentDeck: Word[] = [];
+  currentWordObj: Word | null = null; // שמירת המילה הנוכחית להצגת הפירוש
   
   player: { x: number; y: number; width: number; height: number; isHit: boolean; tilt: number; targetTilt: number; horizontalVelocity: number; lastX: number; lastY: number };
   
@@ -98,12 +99,13 @@ export class GameEngine {
   onFeedback: (msg: string, isGood: boolean) => void;
   onAchievement: (id: string) => void;
   onUnitComplete: (stats: any) => void;
+  onShowWordMeaning: (aramaic: string, hebrew: string) => void;
 
   constructor(
     canvas: HTMLCanvasElement, 
     config: GameConfig,
     inventory: { bombs: number, shields: number, potions: number },
-    callbacks: { onStatsUpdate: any, onGameOver: any, onFeedback: any, onAchievement: any, onUnitComplete: any }
+    callbacks: { onStatsUpdate: any, onGameOver: any, onFeedback: any, onAchievement: any, onUnitComplete: any, onShowWordMeaning: any }
   ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
@@ -120,6 +122,7 @@ export class GameEngine {
     this.onFeedback = callbacks.onFeedback;
     this.onAchievement = callbacks.onAchievement;
     this.onUnitComplete = callbacks.onUnitComplete;
+    this.onShowWordMeaning = callbacks.onShowWordMeaning;
 
     this.applySkinWeapon();
 
@@ -319,6 +322,7 @@ export class GameEngine {
     this.config.location = currentSugia.location;
 
     let wordObj = this.getUniqueWord();
+    this.currentWordObj = wordObj; // שמירת המילה הנוכחית
     this.onStatsUpdate({ 
       currentWord: wordObj.aramaic, 
       level: this.level, 
@@ -576,7 +580,16 @@ export class GameEngine {
             this.startRound();
           }, 50); 
       } else {
-          this.triggerShake(12); this.spawnExplosion(x, y, '#ef4444', 20); this.handleMiss();
+          this.triggerShake(12); 
+          this.spawnExplosion(x, y, '#ef4444', 20);
+          // הצגת הפירוש הנכון למשך 2 שניות
+          if (this.currentWordObj) {
+              this.onShowWordMeaning(this.currentWordObj.aramaic, this.currentWordObj.hebrew);
+          }
+          // השהיה לפני המשך לרמה הבאה
+          setTimeout(() => {
+              this.handleMiss();
+          }, 2000);
       }
   }
 
@@ -593,11 +606,11 @@ export class GameEngine {
           this.onStatsUpdate({ hasShield: this.shieldStrength > 0 });
           setTimeout(() => this.startRound(), 1000);
       } else {
-          this.lives--; this.combo = 0; this.triggerShake(20); Sound.play('hit'); this.onFeedback("נפגעת!", false);
+          this.lives--; this.combo = 0; this.triggerShake(20); Sound.play('hit');
           this.spawnExplosion(this.player.x, this.player.y, '#ef4444', 40);
           this.onStatsUpdate({ lives: this.lives, combo: 0 });
           if (this.lives <= 0) { this.playerExploding = true; this.explosionTimer = 90; this.onStatsUpdate({ bossActive: false, bossHpPercent: 0 }); Sound.play('explosion'); }
-          else { setTimeout(() => this.startRound(), 1200); }
+          else { setTimeout(() => this.startRound(), 200); }
       }
   }
 
