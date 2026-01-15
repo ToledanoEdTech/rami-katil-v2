@@ -77,6 +77,7 @@ function App() {
   const [teacherSelectedCategory, setTeacherSelectedCategory] = useState<'all' | 'berachot' | 'bava_kamma' | 'common'>('all');
   const [teacherAuthPass, setTeacherAuthPass] = useState('');
   const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState(false);
+  const [teacherPermissionLevel, setTeacherPermissionLevel] = useState<'limited' | 'full' | null>(null);
   
   // Add Word Form State
   const [newWordAramaic, setNewWordAramaic] = useState('');
@@ -422,6 +423,54 @@ function App() {
     }
   };
 
+  const handleDeleteWord = async (wordIndex: number) => {
+    if (!confirm('האם אתה בטוח שברצונך למחוק את המילה הזו מהמילון?')) return;
+    
+    const word = fullDictionary[wordIndex];
+    if (!word) return;
+    
+    // Check if this is a dynamic word (can only delete dynamic words)
+    if (wordIndex < DICTIONARY.length) {
+      alert('לא ניתן למחוק מילים קבועות מהמילון המקורי');
+      return;
+    }
+    
+    // Calculate the index in the dynamicWords array
+    const dynamicWordIndex = wordIndex - DICTIONARY.length;
+    
+    const payload = {
+        action: 'deleteWord',
+        wordIndex: dynamicWordIndex,
+        word: {
+            aramaic: word.aramaic,
+            hebrew: word.hebrew,
+            cat: word.cat
+        }
+    };
+
+    try {
+      await fetch(SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        body: JSON.stringify(payload)
+      });
+      
+      setFeedback({ msg: "המילה נמחקה בהצלחה!", isGood: true });
+      
+      // Remove from selected indices if it was selected
+      setTeacherSelectedIndices(prev => prev.filter(i => i !== wordIndex));
+      
+      // Refresh to update the list immediately
+      setTimeout(() => {
+          fetchData();
+          setFeedback(null);
+      }, 2000);
+      
+    } catch (err) {
+      alert('שגיאה בתקשורת עם השרת');
+    }
+  };
+
   useEffect(() => {
     if (displayScore < stats.score) {
       const diff = stats.score - displayScore;
@@ -592,6 +641,7 @@ function App() {
     setIsTeacherAuthenticated(false);
     setTeacherAuthPass('');
     setTeacherSearchTerm('');
+    setTeacherPermissionLevel(null);
     setGameState('MENU');
   };
 
@@ -1420,7 +1470,22 @@ const equipSkin = (id: string) => {
                   <input type="password" placeholder="הכנס קוד גישה" value={teacherAuthPass} onChange={e => setTeacherAuthPass(e.target.value)}
                       className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-center text-white mb-6 outline-none focus:border-blue-500 transition-colors" />
                   <div className="flex gap-4">
-                      <button onClick={() => { if(teacherAuthPass === '123123') { setIsTeacherAuthenticated(true); Sound.play('powerup'); fetchData(); } else { alert('קוד שגוי!'); setTeacherAuthPass(''); } }} className="rk-btn rk-btn-primary flex-1">כניסה</button>
+                      <button onClick={() => { 
+                          if(teacherAuthPass === '123123') { 
+                              setIsTeacherAuthenticated(true); 
+                              setTeacherPermissionLevel('limited');
+                              Sound.play('powerup'); 
+                              fetchData(); 
+                          } else if(teacherAuthPass === '123412340') {
+                              setIsTeacherAuthenticated(true);
+                              setTeacherPermissionLevel('full');
+                              Sound.play('powerup');
+                              fetchData();
+                          } else { 
+                              alert('קוד שגוי!'); 
+                              setTeacherAuthPass(''); 
+                          } 
+                      }} className="rk-btn rk-btn-primary flex-1">כניסה</button>
                       <button onClick={handleReturnToMenu} className="rk-btn rk-btn-muted flex-1">ביטול</button>
                   </div>
               </div>
@@ -1436,9 +1501,9 @@ const equipSkin = (id: string) => {
                       <div className="hidden md:block rk-hud-label">Teacher Mode</div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-auto md:h-full overflow-visible md:overflow-hidden pb-10 md:pb-0">
+                  <div className={`grid ${teacherPermissionLevel === 'full' ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'} gap-6 h-auto md:h-full overflow-visible md:overflow-hidden pb-10 md:pb-0`}>
                     {/* Left Side: Word Selector */}
-                    <div className="flex flex-col h-[55vh] md:h-full overflow-hidden rk-glass p-4 rounded-3xl border border-slate-800/60">
+                    <div className={`flex flex-col ${teacherPermissionLevel === 'full' ? 'h-[55vh] md:h-full' : 'h-[80vh] md:h-full'} overflow-hidden rk-glass p-4 rounded-3xl border border-slate-800/60`}>
                         <h3 className="text-white font-bold mb-4 text-center">בניית שיעור מתוך המילון</h3>
                         
                         <div className="space-y-3 mb-4">
@@ -1469,15 +1534,25 @@ const equipSkin = (id: string) => {
                             ) : filteredTeacherDictionary.map((word) => {
                                 const isSelected = teacherSelectedIndices.includes(word.originalIndex);
                                 return (
-                                    <div key={word.originalIndex} onClick={() => toggleTeacherWordSelection(word.originalIndex)}
-                                      className={`p-3 rounded-xl border-2 flex justify-between items-center transition-all cursor-pointer group
+                                    <div key={word.originalIndex} 
+                                      className={`p-3 rounded-xl border-2 flex justify-between items-center transition-all group
                                           ${isSelected ? 'border-blue-500 bg-blue-900/30' : 'border-slate-800 bg-slate-900/50 hover:border-slate-600'}`}>
-                                        <div className="text-right">
+                                        <div className="text-right flex-1 cursor-pointer" onClick={() => toggleTeacherWordSelection(word.originalIndex)}>
                                             <div className="font-aramaic text-lg text-white">{word.aramaic}</div>
                                             <div className="text-[10px] text-slate-500 font-bold">{word.hebrew}</div>
                                         </div>
-                                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-700'}`}>
-                                            {isSelected && <span className="text-white text-xs">✓</span>}
+                                        <div className="flex items-center gap-2">
+                                            {teacherPermissionLevel === 'full' && word.originalIndex >= DICTIONARY.length && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); handleDeleteWord(word.originalIndex); }}
+                                                    className="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded text-xs font-bold transition-all"
+                                                    title="מחק מילה">
+                                                    🗑️
+                                                </button>
+                                            )}
+                                            <div onClick={() => toggleTeacherWordSelection(word.originalIndex)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all cursor-pointer ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-slate-700'}`}>
+                                                {isSelected && <span className="text-white text-xs">✓</span>}
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -1486,38 +1561,40 @@ const equipSkin = (id: string) => {
                         <button onClick={generateTeacherLink} className="rk-btn rk-btn-primary py-4 rounded-xl font-black text-lg text-white">צור קישור לשיעור ({teacherSelectedIndices.length})</button>
                     </div>
 
-                    {/* Right Side: Add New Word */}
-                    <div className="rk-glass-strong p-6 rounded-3xl border border-blue-500/20 flex flex-col h-auto md:h-auto">
-                        <h3 className="rk-neon-subtitle font-black text-xl mb-6 text-center">הוספת מילה קבועה למילון</h3>
-                        <div className="space-y-4 flex-1">
-                            <div>
-                                <label className="text-slate-400 text-xs block mb-1">מילה בארמית (עם ניקוד)</label>
-                                <input type="text" value={newWordAramaic} onChange={e => setNewWordAramaic(e.target.value)} placeholder="לדוגמא: תַּנְיָא"
-                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
+                    {/* Right Side: Add New Word - Only for full permission */}
+                    {teacherPermissionLevel === 'full' && (
+                        <div className="rk-glass-strong p-6 rounded-3xl border border-blue-500/20 flex flex-col h-auto md:h-auto">
+                            <h3 className="rk-neon-subtitle font-black text-xl mb-6 text-center">הוספת מילה קבועה למילון</h3>
+                            <div className="space-y-4 flex-1">
+                                <div>
+                                    <label className="text-slate-400 text-xs block mb-1">מילה בארמית (עם ניקוד)</label>
+                                    <input type="text" value={newWordAramaic} onChange={e => setNewWordAramaic(e.target.value)} placeholder="לדוגמא: תַּנְיָא"
+                                        className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
+                                </div>
+                                <div>
+                                    <label className="text-slate-400 text-xs block mb-1">תרגום לעברית</label>
+                                    <input type="text" value={newWordHebrew} onChange={e => setNewWordHebrew(e.target.value)} placeholder="לדוגמא: שנויה בברייתא"
+                                        className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
+                                </div>
+                                <div>
+                                    <label className="text-slate-400 text-xs block mb-1">קטגוריה</label>
+                                    <select value={newWordCategory} onChange={e => setNewWordCategory(e.target.value as any)}
+                                        className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-white outline-none focus:border-blue-500">
+                                        <option value="common">מילים נפוצות</option>
+                                        <option value="berachot">מסכת ברכות</option>
+                                        <option value="bava_kamma">מסכת בבא קמא</option>
+                                    </select>
+                                </div>
+                                <div className="p-4 bg-blue-900/20 rounded-xl border border-blue-800 text-xs text-blue-300">
+                                    * המילים שתספו יישמרו בגוגל שיטס ויופיעו מיד ברשימה לבחירה.
+                                </div>
                             </div>
-                            <div>
-                                <label className="text-slate-400 text-xs block mb-1">תרגום לעברית</label>
-                                <input type="text" value={newWordHebrew} onChange={e => setNewWordHebrew(e.target.value)} placeholder="לדוגמא: שנויה בברייתא"
-                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-right text-white outline-none focus:border-blue-500" />
-                            </div>
-                            <div>
-                                <label className="text-slate-400 text-xs block mb-1">קטגוריה</label>
-                                <select value={newWordCategory} onChange={e => setNewWordCategory(e.target.value as any)}
-                                    className="w-full rk-glass border border-slate-700/60 rounded-xl p-4 text-white outline-none focus:border-blue-500">
-                                    <option value="common">מילים נפוצות</option>
-                                    <option value="berachot">מסכת ברכות</option>
-                                    <option value="bava_kamma">מסכת בבא קמא</option>
-                                </select>
-                            </div>
-                            <div className="p-4 bg-blue-900/20 rounded-xl border border-blue-800 text-xs text-blue-300">
-                                * המילים שתספו יישמרו בגוגל שיטס ויופיעו מיד ברשימה לבחירה.
-                            </div>
+                            <button onClick={handleAddNewWord} disabled={isAddingWord}
+                                className="mt-6 w-full rk-btn rk-btn-primary py-5 rounded-2xl font-black text-xl disabled:opacity-50 text-white">
+                                {isAddingWord ? 'מוסיף...' : 'הוסף למילון הקבוע'}
+                            </button>
                         </div>
-                        <button onClick={handleAddNewWord} disabled={isAddingWord}
-                            className="mt-6 w-full rk-btn rk-btn-primary py-5 rounded-2xl font-black text-xl disabled:opacity-50 text-white">
-                            {isAddingWord ? 'מוסיף...' : 'הוסף למילון הקבוע'}
-                        </button>
-                    </div>
+                    )}
                   </div>
               </div>
           </div>
